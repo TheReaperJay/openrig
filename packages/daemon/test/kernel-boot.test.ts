@@ -80,7 +80,7 @@ function makeBaseDeps(
     bootstrapOrchestrator: makeBootstrapMock(),
     specsDir,
     cwdOverride: specsDir,
-    probeRuntimes: async () => ({ claudeCode: "ok", codex: "ok" }),
+    probeRuntimes: async () => ({ claudeCode: "ok", codex: "ok", pi: "unavailable" }),
     log: () => {},
     degradedTimeoutMs: 0, // disable degraded timer for default tests
     ...overrides,
@@ -105,13 +105,16 @@ afterEach(() => {
 
 describe("selectVariant — auth-state → variant mapping", () => {
   it("picks rig.yaml when both runtimes available", () => {
-    expect(selectVariant({ claudeCode: "ok", codex: "ok" })).toBe("rig.yaml");
+    expect(selectVariant({ claudeCode: "ok", codex: "ok", pi: "unavailable" })).toBe("rig.yaml");
   });
   it("picks rig-claude-only.yaml when only Claude available", () => {
-    expect(selectVariant({ claudeCode: "ok", codex: "unavailable" })).toBe("rig-claude-only.yaml");
+    expect(selectVariant({ claudeCode: "ok", codex: "unavailable", pi: "unavailable" })).toBe("rig-claude-only.yaml");
   });
   it("picks rig-codex-only.yaml when only Codex available", () => {
-    expect(selectVariant({ claudeCode: "unavailable", codex: "ok" })).toBe("rig-codex-only.yaml");
+    expect(selectVariant({ claudeCode: "unavailable", codex: "ok", pi: "unavailable" })).toBe("rig-codex-only.yaml");
+  });
+  it("picks rig-pi-only.yaml when only Pi available", () => {
+    expect(selectVariant({ claudeCode: "unavailable", codex: "unavailable", pi: "ok" })).toBe("rig-pi-only.yaml");
   });
 });
 
@@ -163,7 +166,7 @@ describe("bootKernelIfNeeded — short-circuit branches", () => {
     const bootstrap = makeBootstrapMock();
     const tracker = await bootKernelIfNeeded(makeBaseDeps({
       bootstrapOrchestrator: bootstrap,
-      probeRuntimes: async () => ({ claudeCode: "unavailable", codex: "unavailable" }),
+      probeRuntimes: async () => ({ claudeCode: "unavailable", codex: "unavailable", pi: "unavailable" }),
     }, tmpSpecsDir));
     const status = tracker.getStatus();
     expect(status.kernelState).toBe("auth_blocked");
@@ -230,7 +233,7 @@ describe("bootKernelIfNeeded — fire-and-forget bootstrap", () => {
 
   it("uses the claude-only variant when only Claude is available", async () => {
     const tracker = await bootKernelIfNeeded(makeBaseDeps({
-      probeRuntimes: async () => ({ claudeCode: "ok", codex: "unavailable" }),
+      probeRuntimes: async () => ({ claudeCode: "ok", codex: "unavailable", pi: "unavailable" }),
     }, tmpSpecsDir));
     expect(tracker.getStatus().variant).toBe("rig-claude-only.yaml");
     tracker.stop();
@@ -238,7 +241,7 @@ describe("bootKernelIfNeeded — fire-and-forget bootstrap", () => {
 
   it("uses the codex-only variant when only Codex is available", async () => {
     const tracker = await bootKernelIfNeeded(makeBaseDeps({
-      probeRuntimes: async () => ({ claudeCode: "unavailable", codex: "ok" }),
+      probeRuntimes: async () => ({ claudeCode: "unavailable", codex: "ok", pi: "unavailable" }),
     }, tmpSpecsDir));
     expect(tracker.getStatus().variant).toBe("rig-codex-only.yaml");
     tracker.stop();

@@ -17,7 +17,7 @@
 // rather than "daemon failed to start".
 
 import nodePath from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { RigRepository } from "./rig-repository.js";
 import type { BootstrapOrchestrator } from "./bootstrap-orchestrator.js";
 import type { EventBus } from "./event-bus.js";
@@ -29,6 +29,7 @@ export type RuntimeAuthStatus = "ok" | "unavailable";
 export interface RuntimeProbeResult {
   claudeCode: RuntimeAuthStatus;
   codex: RuntimeAuthStatus;
+  pi: RuntimeAuthStatus;
 }
 
 export interface KernelBootDeps {
@@ -101,8 +102,8 @@ export async function bootKernelIfNeeded(deps: KernelBootDeps): Promise<KernelBo
   // 3. Probe runtime auth state to pick a variant.
   const probe = await (deps.probeRuntimes ?? defaultProbeRuntimes)();
 
-  if (probe.claudeCode === "unavailable" && probe.codex === "unavailable") {
-    const msg = authBlockMessage();
+  if (probe.claudeCode === "unavailable" && probe.codex === "unavailable" && probe.pi === "unavailable") {
+    const msg = authBlockMessage(probe);
     log("error", msg);
     tracker.setAuthBlocked(msg);
     return tracker;
@@ -141,8 +142,9 @@ export function selectVariant(probe: RuntimeProbeResult): string {
   if (probe.claudeCode === "ok" && probe.codex === "ok") return "rig.yaml";
   if (probe.claudeCode === "ok") return "rig-claude-only.yaml";
   if (probe.codex === "ok") return "rig-codex-only.yaml";
+  if (probe.pi === "ok") return "rig-pi-only.yaml";
   // Caller is expected to short-circuit before reaching here on the
-  // both-unavailable path; defensive default keeps the type narrow.
+  // all-unavailable path; defensive default keeps the type narrow.
   return "rig.yaml";
 }
 
@@ -172,18 +174,45 @@ async function defaultProbeRuntimes(): Promise<RuntimeProbeResult> {
     tryProbe("claude auth status"),
     tryProbe("codex login status"),
   ]);
+  const pi = probePiAuth();
 
-  return { claudeCode, codex };
+  return { claudeCode, codex, pi };
+}
+
+/** Probe Pi auth by reading ~/.pi/agent/auth.json. Pi has no single
+ *  login CLI; credentials are provider API keys stored after /login or
+ *  manual setup. If the file exists and has at least one non-empty key,
+ *  we consider Pi authenticated. */
+function probePiAuth(): RuntimeAuthStatus {
+  try {
+    const authPath = nodePath.join(process.env.HOME ?? "", ".pi", "agent", "auth.json");
+    if (!existsSync(authPath)) return "unavailable";
+    const raw = readFileSync(authPath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, { type?: string; key?: string }>;
+    for (const entry of Object.values(parsed)) {
+      if (typeof entry?.key === "string" && entry.key.trim().length > 0) {
+        return "ok";
+      }
+    }
+    return "unavailable";
+  } catch {
+    return "unavailable";
+  }
 }
 
 /** Honest 3-part-error message for the auth-block path. Per IMPL-PRD
  *  §6.3 + the building-agent-software skill discipline. */
-export function authBlockMessage(): string {
-  return [
+export function authBlockMessage(probe?: RuntimeProbeResult): string {
+  const lines = [
     "Error: Kernel rig cannot boot — no AI runtime is authenticated.",
-    "Reason: Kernel rig requires at least one of Claude Code or Codex authenticated. Both are unavailable.",
-    "Fix: Run `claude auth login` to authenticate Claude Code, OR `codex login` to authenticate Codex. Then run `rig daemon start` (or `rig setup`) again.",
-  ].join("\n");
+  ];
+  if (probe?.pi === "ok") {
+    lines.push("Reason: Claude Code and Codex are unavailable. Pi appears to have credentials, but no Pi-only auto-boot variant is enabled by default.");
+  } else {
+    lines.push("Reason: Kernel rig requires at least one of Claude Code, Codex, or Pi authenticated. All are unavailable.");
+  }
+  lines.push("Fix: Run `claude auth login` to authenticate Claude Code, OR `codex login` to authenticate Codex, OR configure a Pi provider API key via `pi` / `/login`. Then run `rig daemon start` (or `rig setup`) again.");
+  return lines.join("\n");
 }
 
 function defaultLog(level: "info" | "warn" | "error", message: string): void {

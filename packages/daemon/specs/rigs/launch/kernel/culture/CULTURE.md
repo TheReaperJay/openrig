@@ -42,10 +42,14 @@ machine and have things happen.
   they require explicit operator-initiated `rig up` / `rig restore`
   via the agent-driven workflow.
 - **Honest auth-block, not silent fallback.** If neither Claude Code
-  nor Codex is authenticated, the daemon refuses to boot the kernel
-  and surfaces a 3-part error (fact / reason / fix) per the
+  nor Codex nor Pi is authenticated, the daemon refuses to boot the
+  kernel and surfaces a 3-part error (fact / reason / fix) per the
   building-agent-software skill discipline. No best-effort
   half-booted state.
+- **Pi-only variant.** When Claude Code and Codex are unavailable but
+  the Pi coding agent has stored credentials (`~/.pi/agent/auth.json`),
+  the daemon selects the `rig-pi-only.yaml` kernel variant so the same
+  three roles run on Pi.
 - **Migration ceremony is part of the upgrade.** V0.3.1 ships the
   kernel as a daemon-managed built-in; operators with a pre-existing
   substrate-rooted kernel migrate as a one-time step during the

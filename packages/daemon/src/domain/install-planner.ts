@@ -57,7 +57,7 @@ export class InstallPlanner {
   plan(
     resolved: ResolvedPackage,
     targetRoot: string,
-    runtime: "claude-code" | "codex",
+    runtime: "claude-code" | "codex" | "pi-coding-agent",
     options?: PlanOptions,
   ): InstallPlan {
     // R2-H2: Compatibility check — runtime must be in manifest's runtimes
@@ -91,7 +91,7 @@ export class InstallPlanner {
       for (const file of files) {
         const targetPath = runtime === "claude-code"
           ? path.join(targetRoot, ".claude", "skills", skill.name, file)
-          : path.join(targetRoot, ".agents", "skills", skill.name, file);
+          : path.join(targetRoot, runtime === "pi-coding-agent" ? ".pi" : ".agents", "skills", skill.name, file);
 
         const exists = this.fs.exists(targetPath);
         const entry: InstallPlanEntry = {
@@ -149,6 +149,18 @@ export class InstallPlanner {
         });
         continue;
       }
+      if (g.kind === "agents_md" && runtime === "pi-coding-agent") {
+        entries.push({
+          exportType: "guidance",
+          exportName: g.name,
+          classification: "config_mutation",
+          targetPath: "",
+          scope: "project_shared",
+          deferred: true,
+          deferReason: "agents_md guidance not applicable to pi-coding-agent",
+        });
+        continue;
+      }
       if (g.kind === "claude_md" && runtime === "codex") {
         entries.push({
           exportType: "guidance",
@@ -158,6 +170,18 @@ export class InstallPlanner {
           scope: "project_shared",
           deferred: true,
           deferReason: "claude_md guidance not applicable to codex",
+        });
+        continue;
+      }
+      if (g.kind === "claude_md" && runtime === "pi-coding-agent") {
+        entries.push({
+          exportType: "guidance",
+          exportName: g.name,
+          classification: "config_mutation",
+          targetPath: "",
+          scope: "project_shared",
+          deferred: true,
+          deferReason: "claude_md guidance not applicable to pi-coding-agent",
         });
         continue;
       }
@@ -233,7 +257,7 @@ export class InstallPlanner {
 
       const targetPath = runtime === "claude-code"
         ? path.join(targetRoot, ".claude", "agents", `${agentName}.yaml`)
-        : path.join(targetRoot, ".agents", `${agentName}.yaml`);
+        : path.join(targetRoot, runtime === "pi-coding-agent" ? ".pi" : ".agents", `${agentName}.yaml`);
 
       const agentSourcePath = path.join(resolved.sourceRef, agent.source);
 

@@ -66,9 +66,16 @@ export class RuntimeVerifier {
     return result;
   }
 
+  /** Verify Pi coding agent: `pi --version`, fallback to `pi --help`. */
+  async verifyPi(): Promise<RuntimeVerification> {
+    const result = await this.verifyVersionOrHelp("pi", "pi-coding-agent");
+    this.persist(result);
+    return result;
+  }
+
   /**
    * Verify multiple runtimes. Returns results in input order.
-   * @param runtimes - canonical runtime names: 'tmux', 'cmux', 'claude-code', 'codex'
+   * @param runtimes - canonical runtime names: 'tmux', 'cmux', 'claude-code', 'codex', 'pi-coding-agent'
    */
   async verifyAll(runtimes: string[]): Promise<RuntimeVerification[]> {
     const results: RuntimeVerification[] = [];
@@ -78,6 +85,7 @@ export class RuntimeVerifier {
         case "cmux": results.push(await this.verifyCmux()); break;
         case "claude-code": results.push(await this.verifyClaude()); break;
         case "codex": results.push(await this.verifyCodex()); break;
+        case "pi-coding-agent": results.push(await this.verifyPi()); break;
         default: {
           const v = this.buildVerification(runtime, "not_found", null, null, `unknown runtime: ${runtime}`);
           this.persist(v);
