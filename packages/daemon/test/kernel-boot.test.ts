@@ -138,6 +138,13 @@ describe("authBlockMessage — 3-part error contract", () => {
     expect(msg).toMatch(/^Fix:/m);
     expect(msg).toContain("claude auth login");
     expect(msg).toContain("codex login");
+    expect(msg).toContain("Pi");
+  });
+
+  it("points at Pi when Pi is the only authenticated runtime", () => {
+    const msg = authBlockMessage({ claudeCode: "unavailable", codex: "unavailable", pi: "ok" });
+    expect(msg).toContain("Claude Code and Codex are unavailable");
+    expect(msg).toContain("Pi appears to have credentials");
   });
 });
 

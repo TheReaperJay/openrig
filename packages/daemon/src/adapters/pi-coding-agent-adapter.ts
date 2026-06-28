@@ -247,7 +247,7 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
     if (!targetDir) return true;
 
     this.fs.mkdirp(targetDir);
-    const sourceRoot = this.resolvePluginSourceRoot(entry);
+    const sourceRoot = entry.category === "plugin" ? this.resolvePluginSourceRoot(entry) : entry.absolutePath;
     const isDir = this.fs.listFiles ? this.fs.listFiles(sourceRoot).length > 0 : false;
 
     if (isDir && this.fs.listFiles) {

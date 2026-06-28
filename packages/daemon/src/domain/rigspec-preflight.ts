@@ -122,7 +122,7 @@ import { resolveAgentRef, type AgentResolverFsOps } from "./agent-resolver.js";
 import { resolveNodeConfig, type ResolutionContext } from "./profile-resolver.js";
 import { getOpenRigInstallCwdError, resolveLaunchCwd } from "./cwd-resolution.js";
 
-const SUPPORTED_RUNTIMES = new Set(["claude-code", "codex", "terminal"]);
+const SUPPORTED_RUNTIMES = new Set(["claude-code", "codex", "pi-coding-agent", "terminal"]);
 
 export interface RigPreflightInput {
   rigSpecYaml: string;

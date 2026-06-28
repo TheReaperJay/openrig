@@ -121,6 +121,29 @@ describe("RuntimeVerifier", () => {
     expect(result.runtime).toBe("codex");
   });
 
+  // T6c: pi --version succeeds -> verified
+  it("pi --version succeeds -> verified", async () => {
+    const exec = createMockExec({ "pi --version": "0.78.0" });
+    const verifier = new RuntimeVerifier({ exec, db });
+
+    const result = await verifier.verifyPi();
+
+    expect(result.status).toBe("verified");
+    expect(result.version).toBe("0.78.0");
+    expect(result.runtime).toBe("pi-coding-agent");
+  });
+
+  // T6d: pi --version fails, --help succeeds -> verified (fallback)
+  it("pi --version fails but --help succeeds -> verified", async () => {
+    const exec = createMockExec({ "pi --version": new Error("not found"), "pi --help": "pi usage ..." });
+    const verifier = new RuntimeVerifier({ exec, db });
+
+    const result = await verifier.verifyPi();
+
+    expect(result.status).toBe("verified");
+    expect(result.runtime).toBe("pi-coding-agent");
+  });
+
   // T7: verifyTmux auto-persists to DB
   it("verification auto-persists to runtime_verifications table", async () => {
     const exec = createMockExec({ "tmux -V": "tmux 3.4" });

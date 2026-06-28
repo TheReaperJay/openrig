@@ -63,6 +63,18 @@ function makePluginEntry(id: string, absolutePath: string): ProjectionEntry {
   };
 }
 
+function makeSkillEntry(id: string, absolutePath: string): ProjectionEntry {
+  return {
+    category: "skill",
+    effectiveId: id,
+    sourceSpec: "test-spec",
+    sourcePath: "/specs/test-spec",
+    resourcePath: absolutePath,
+    absolutePath,
+    classification: "safe_projection",
+  };
+}
+
 function makePlan(entries: ProjectionEntry[]): ProjectionPlan {
   return {
     runtime: "pi-coding-agent",
@@ -140,6 +152,27 @@ describe("Pi Coding Agent adapter — plugin projection", () => {
     const result = await adapter.project(plan, makeBinding("/cwd"));
     expect(result.projected).toContain("forced-pi");
     expect(fs._store["/cwd/.pi/extensions/forced-pi/index.ts"]).toBe("// extension");
+  });
+});
+
+describe("Pi Coding Agent adapter — skill projection", () => {
+  it("projects a skill directory to .pi/skills/<id>/ without appending a pi/ subdir", async () => {
+    // Regression: resolvePluginSourceRoot() was being called for skills too,
+    // which appended a non-existent `pi/` subdir and caused ENOENT on real
+    // rig up. Skills project their own directory verbatim.
+    const fs = mockPiFs({
+      "/s/brainstorming/SKILL.md": "---\nname: brainstorming\ndescription: x\n---\nbody",
+      "/s/brainstorming/guide.md": "# guide",
+    });
+    const adapter = new PiCodingAgentAdapter({ tmux: mockTmux(), fsOps: fs });
+    const plan = makePlan([makeSkillEntry("brainstorming", "/s/brainstorming")]);
+
+    const result = await adapter.project(plan, makeBinding("/cwd"));
+
+    expect(result.projected).toContain("brainstorming");
+    expect(result.failed).toEqual([]);
+    expect(fs._store["/cwd/.pi/skills/brainstorming/SKILL.md"]).toContain("brainstorming");
+    expect(fs._store["/cwd/.pi/skills/brainstorming/guide.md"]).toBe("# guide");
   });
 });
 

@@ -340,6 +340,22 @@ describe("Rebooted rig preflight", () => {
     expect(result.errors.some((e) => e.includes("unsupported runtime"))).toBe(true);
   });
 
+  // T6b: pi-coding-agent runtime is a first-class supported runtime
+  it("accepts pi-coding-agent runtime", async () => {
+    const files: Record<string, string> = {
+      [`${RIG_ROOT}/agents/impl/agent.yaml`]: validAgentYaml("impl"),
+    };
+    const rigYaml = makeRigYaml({
+      pods: [{
+        id: "dev", label: "Dev",
+        members: [{ id: "impl", agentRef: "local:agents/impl", profile: "default", runtime: "pi-coding-agent", cwd: "." }],
+        edges: [],
+      }],
+    });
+    const result = await rigPreflight({ rigSpecYaml: rigYaml, rigRoot: RIG_ROOT, fsOps: mockFs(files) });
+    expect(result.errors.some((e) => e.includes("unsupported runtime"))).toBe(false);
+  });
+
   // T7: missing cwd
   it("reports missing cwd", async () => {
     const files: Record<string, string> = {
