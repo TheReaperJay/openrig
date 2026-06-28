@@ -68,5 +68,16 @@ resources:
       path: runtime/codex-config.fragment.toml
       runtime: codex
       type: codex_config_fragment
+  # openrig-core carries the activity-relay hooks (hooks/claude.json,
+  # hooks/codex.json, pi/ extension) that POST seat state to the daemon's
+  # /api/activity/hooks endpoint. Declared here so every managed seat that
+  # imports shared gets activity tracking by default. plugin_type is left
+  # to the default ("auto"); each runtime adapter projects only its own
+  # manifest (.claude-plugin / .codex-plugin / .pi-plugin).
+  plugins:
+    - id: openrig-core
+      source:
+        kind: local
+        path: ~/.openrig/plugins/openrig-core
 
 profiles: {}

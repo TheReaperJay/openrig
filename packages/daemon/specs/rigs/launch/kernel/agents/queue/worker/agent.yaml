@@ -14,7 +14,7 @@ profiles:
       skills: [openrig-user]
       guidance: [role]
       subagents: []
-      plugins: []
+      plugins: [openrig-core]
       runtime_resources: [shared:claude-default-settings, shared:claude-default-mcp, shared:codex-default-config]
 
 resources:
