@@ -22,11 +22,11 @@ export interface ProjectionEntry {
   mergeStrategy?: "managed_block" | "append";
   target?: string;
   /** Plugin runtime applicability hint. Only meaningful for category=plugin.
-   *  - "claude" / "codex": explicit operator override; only the named runtime adapter projects
-   *  - "auto" or undefined: adapter detects manifest dirs (.claude-plugin/ vs .codex-plugin/)
+   *  - "claude" / "codex" / "pi": explicit operator override; only the named runtime adapter projects
+   *  - "auto" or undefined: adapter detects manifest dirs (.claude-plugin/ vs .codex-plugin/ vs .pi-plugin/)
    *    and projects only when its runtime-specific manifest is present
    */
-  pluginType?: "claude" | "codex" | "auto";
+  pluginType?: "claude" | "codex" | "pi" | "auto";
 }
 
 export interface ProjectionPlan {
@@ -136,7 +136,7 @@ export function planProjection(input: ProjectionInput): PlanResult {
       }
 
       if (catKey === "plugins") {
-        const pluginRes = qr.resource as { pluginType?: "claude" | "codex" | "auto" };
+        const pluginRes = qr.resource as { pluginType?: "claude" | "codex" | "pi" | "auto" };
         entry.pluginType = pluginRes.pluginType ?? "auto";
       }
 

@@ -612,7 +612,7 @@ export type PluginSource =
 export interface PluginResource {
   id: string;
   source: PluginSource;
-  pluginType?: "claude" | "codex" | "auto";
+  pluginType?: "claude" | "codex" | "pi" | "auto";
 }
 
 export interface AgentResources {

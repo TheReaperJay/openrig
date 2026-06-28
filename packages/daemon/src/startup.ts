@@ -577,7 +577,15 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     db, rigRepo, podRepo,
     sessionRegistry, eventBus, nodeLauncher, startupOrchestrator,
     fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), exists: (p: string) => fs.existsSync(p) },
-    adapters: { "claude-code": claudeAdapter, "codex": codexAdapter, "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter() },
+    adapters: {
+      "claude-code": claudeAdapter,
+      "codex": codexAdapter,
+      "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter(),
+      "pi-coding-agent": new (await import("./adapters/pi-coding-agent-adapter.js")).PiCodingAgentAdapter({
+        tmux: tmuxAdapter,
+        fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, homedir: os.homedir() },
+      }),
+    },
     tmuxAdapter,
     contextPackLibrary,
     agentImageLibrary,
@@ -733,7 +741,15 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     }),
     podInstantiator,
     podBundleSourceResolver,
-    runtimeAdapters: { "claude-code": claudeAdapter, "codex": codexAdapter, "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter() },
+    runtimeAdapters: {
+      "claude-code": claudeAdapter,
+      "codex": codexAdapter,
+      "terminal": new (await import("./adapters/terminal-adapter.js")).TerminalAdapter(),
+      "pi-coding-agent": new (await import("./adapters/pi-coding-agent-adapter.js")).PiCodingAgentAdapter({
+        tmux: tmuxAdapter,
+        fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, homedir: os.homedir() },
+      }),
+    },
     transcriptStore,
     sessionTransport: (() => {
       const t = new SessionTransport({ db, rigRepo, sessionRegistry, tmuxAdapter, agentActivityStore });

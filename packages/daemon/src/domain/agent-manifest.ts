@@ -373,7 +373,7 @@ function normalizePluginResource(raw: Record<string, unknown>): PluginResource {
     source,
   };
   const pluginType = raw["plugin_type"] ?? raw["pluginType"];
-  if (pluginType === "claude" || pluginType === "codex" || pluginType === "auto") {
+  if (pluginType === "claude" || pluginType === "codex" || pluginType === "pi" || pluginType === "auto") {
     result.pluginType = pluginType;
   }
   return result;
@@ -412,8 +412,8 @@ function validatePluginResources(entries: Array<Record<string, unknown>>): strin
     }
 
     const pluginType = entry["plugin_type"] ?? entry["pluginType"];
-    if (pluginType !== undefined && pluginType !== "claude" && pluginType !== "codex" && pluginType !== "auto") {
-      errors.push(`resources.plugins[${i}].plugin_type: must be "claude" | "codex" | "auto" (got "${String(pluginType)}")`);
+    if (pluginType !== undefined && pluginType !== "claude" && pluginType !== "codex" && pluginType !== "pi" && pluginType !== "auto") {
+      errors.push(`resources.plugins[${i}].plugin_type: must be "claude" | "codex" | "pi" | "auto" (got "${String(pluginType)}")`);
     }
   }
   return errors;

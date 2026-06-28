@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import type { SkillResource } from "./types.js";
 
-export type SkillRuntime = "claude-code" | "codex";
+export type SkillRuntime = "claude-code" | "codex" | "pi-coding-agent";
 
 export interface SkillDiscoveryPaths {
   runtime: SkillRuntime;
@@ -189,7 +189,11 @@ export function discoverSkillsForRuntime(paths: SkillDiscoveryPaths): SkillDisco
  *  cross-runtime one. */
 function listScanRoots(paths: SkillDiscoveryPaths): string[] {
   const { runtime, homedir, cwd, specInstallDir } = paths;
-  const runtimeDir = runtime === "claude-code" ? ".claude" : ".agents";
+  let runtimeDir: string;
+  if (runtime === "claude-code") runtimeDir = ".claude";
+  else if (runtime === "codex") runtimeDir = ".agents";
+  else runtimeDir = ".pi";
+
   const roots: string[] = [];
 
   // 1. Rig-bundled at cwd (most-specific; ships with the rig source).
@@ -199,7 +203,7 @@ function listScanRoots(paths: SkillDiscoveryPaths): string[] {
   // separate path; e.g., from `rig up <bundle>` extraction).
   if (specInstallDir) roots.push(join(specInstallDir, "skills"));
 
-  // 3. Runtime-specific user library (Claude-only or Codex-only
+  // 3. Runtime-specific user library (Claude-only, Codex-only, or Pi-only
   // operator install).
   roots.push(join(homedir, runtimeDir, "skills"));
 
@@ -211,7 +215,10 @@ function listScanRoots(paths: SkillDiscoveryPaths): string[] {
 }
 
 function rootToSourceKind(root: string, paths: SkillDiscoveryPaths): SourceKind {
-  const runtimeDir = paths.runtime === "claude-code" ? ".claude" : ".agents";
+  let runtimeDir: string;
+  if (paths.runtime === "claude-code") runtimeDir = ".claude";
+  else if (paths.runtime === "codex") runtimeDir = ".agents";
+  else runtimeDir = ".pi";
   const rigBundled = join(paths.cwd, runtimeDir, "skills");
   if (root === rigBundled) return "rig_bundled";
   if (paths.specInstallDir && root === join(paths.specInstallDir, "skills")) return "spec_install";

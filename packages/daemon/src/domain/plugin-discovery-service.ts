@@ -32,7 +32,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { parse as parseYaml } from "yaml";
 
-export type PluginRuntime = "claude" | "codex";
+export type PluginRuntime = "claude" | "codex" | "pi";
 // Slice 3.3 fix-C — `rig-cwd` source per DESIGN §5.4 union (4th category):
 // rig-bundled `<cwd>/.claude/plugins/*` + `<cwd>/.codex/plugins/*` (the
 // projection target from IMPL-PRD §1.2). velocity-qa VM verify failure #3.
@@ -194,6 +194,7 @@ export interface ListPluginsOpts {
 
 const CLAUDE_MANIFEST_REL = ".claude-plugin/plugin.json";
 const CODEX_MANIFEST_REL = ".codex-plugin/plugin.json";
+const PI_MANIFEST_REL = ".pi-plugin/plugin.json";
 
 export class PluginDiscoveryService {
   private readonly opts: PluginDiscoveryServiceOpts;
@@ -398,17 +399,20 @@ export class PluginDiscoveryService {
   ): PluginEntry | null {
     const claudeManifestPath = join(pluginPath, CLAUDE_MANIFEST_REL);
     const codexManifestPath = join(pluginPath, CODEX_MANIFEST_REL);
+    const piManifestPath = join(pluginPath, PI_MANIFEST_REL);
 
     const hasClaude = existsSync(claudeManifestPath);
     const hasCodex = existsSync(codexManifestPath);
-    if (!hasClaude && !hasCodex) return null;
+    const hasPi = existsSync(piManifestPath);
+    if (!hasClaude && !hasCodex && !hasPi) return null;
 
     const runtimes: PluginRuntime[] = [];
     if (hasClaude) runtimes.push("claude");
     if (hasCodex) runtimes.push("codex");
+    if (hasPi) runtimes.push("pi");
 
     // Read the first available manifest for name/version/description.
-    const primaryManifestPath = hasClaude ? claudeManifestPath : codexManifestPath;
+    const primaryManifestPath = hasClaude ? claudeManifestPath : hasCodex ? codexManifestPath : piManifestPath;
     const manifest = readManifest(primaryManifestPath);
     if (!manifest) return null;
 
