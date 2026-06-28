@@ -95,3 +95,23 @@ export const CLOSE_REASONS: ReadonlyArray<CloseReason> = [
   "superseded",
   "stale",
 ];
+
+/** OPR.0.4.1.6 — the scope-and-versioning §2 epistemic-maturity `stage` enum
+ *  (4 rungs + 2 exits). The ONLY valid stage values; invented values
+ *  (shape/shaped/draft) are rejected. `superseded` must name its successor;
+ *  `retired` means do-not-use. */
+export type Stage =
+  | "wip"
+  | "provisional"
+  | "established"
+  | "canonical"
+  | "superseded"
+  | "retired";
+export const STAGE_VALUES: ReadonlyArray<Stage> = [
+  "wip",
+  "provisional",
+  "established",
+  "canonical",
+  "superseded",
+  "retired",
+];

@@ -7,6 +7,7 @@ import { migrate } from "../src/db/migrate.js";
 import { coreSchema } from "../src/db/migrations/001_core_schema.js";
 import { bindingsSessionsSchema } from "../src/db/migrations/002_bindings_sessions.js";
 import { nodeSpecFieldsSchema } from "../src/db/migrations/007_node_spec_fields.js";
+import { rigArchiveSchema } from "../src/db/migrations/042_rig_archive.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { RigSpecPreflight } from "../src/domain/rigspec-preflight.js";
 import type { LegacyRigSpec as RigSpec } from "../src/domain/types.js"; // TODO: AS-T08b — migrate to pod-aware RigSpec
@@ -15,7 +16,7 @@ import type { ExecFn } from "../src/adapters/tmux.js";
 
 function setupDb(): Database.Database {
   const db = createDb();
-  migrate(db, [coreSchema, bindingsSessionsSchema, nodeSpecFieldsSchema]);
+  migrate(db, [coreSchema, bindingsSessionsSchema, nodeSpecFieldsSchema, rigArchiveSchema]);
   return db;
 }
 

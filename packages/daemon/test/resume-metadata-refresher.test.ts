@@ -83,7 +83,8 @@ describe("ResumeMetadataRefresher", () => {
     expect(sessionRegistry.updateResumeToken).toHaveBeenCalledWith(
       "sess-1",
       "codex_id",
-      "019d45c3-e909-7152-b52e-34edab4070ed"
+      "019d45c3-e909-7152-b52e-34edab4070ed",
+      "scrape"
     );
   });
 
@@ -119,7 +120,8 @@ describe("ResumeMetadataRefresher", () => {
     expect(sessionRegistry.updateResumeToken).toHaveBeenCalledWith(
       "sess-1",
       "codex_id",
-      "019d45c3-e909-7152-b52e-34edab4070ed"
+      "019d45c3-e909-7152-b52e-34edab4070ed",
+      "scrape"
     );
   });
 
@@ -159,7 +161,8 @@ describe("ResumeMetadataRefresher", () => {
     expect(sessionRegistry.updateResumeToken).toHaveBeenCalledWith(
       "sess-1",
       "codex_id",
-      "019d45c3-e909-7152-b52e-34edab4070ed"
+      "019d45c3-e909-7152-b52e-34edab4070ed",
+      "scrape"
     );
   });
 
@@ -199,7 +202,8 @@ describe("ResumeMetadataRefresher", () => {
     expect(sessionRegistry.updateResumeToken).toHaveBeenCalledWith(
       "sess-1",
       "codex_id",
-      "019d45c3-e909-7152-b52e-34edab4070ed"
+      "019d45c3-e909-7152-b52e-34edab4070ed",
+      "scrape"
     );
   });
 

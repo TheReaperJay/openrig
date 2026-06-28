@@ -18,13 +18,14 @@ import { journalSeqSchema } from "../src/db/migrations/010_journal_seq.js";
 import { bootstrapSchema } from "../src/db/migrations/011_bootstrap.js";
 import { discoverySchema } from "../src/db/migrations/012_discovery.js";
 import { discoveryFkFix } from "../src/db/migrations/013_discovery_fk_fix.js";
+import { rigArchiveSchema } from "../src/db/migrations/042_rig_archive.js";
 import { createTestApp } from "./helpers/test-app.js";
 
 const ALL_MIGRATIONS = [
   coreSchema, bindingsSessionsSchema, eventsSchema, snapshotsSchema,
   checkpointsSchema, resumeMetadataSchema, nodeSpecFieldsSchema,
   packagesSchema, installJournalSchema, journalSeqSchema, bootstrapSchema,
-  discoverySchema, discoveryFkFix,
+  discoverySchema, discoveryFkFix, rigArchiveSchema,
 ];
 
 const VALID_SPEC = `

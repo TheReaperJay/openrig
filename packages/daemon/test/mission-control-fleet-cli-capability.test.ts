@@ -5,6 +5,7 @@ import { migrate } from "../src/db/migrate.js";
 import { coreSchema } from "../src/db/migrations/001_core_schema.js";
 import { eventsSchema } from "../src/db/migrations/003_events.js";
 import { queueItemsSchema } from "../src/db/migrations/024_queue_items.js";
+import { rigArchiveSchema } from "../src/db/migrations/042_rig_archive.js";
 import { EventBus } from "../src/domain/event-bus.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import {
@@ -22,7 +23,7 @@ describe("MissionControlFleetCliCapability (PL-005 Phase A; 4 sub-clauses of gra
 
   beforeEach(() => {
     db = createDb();
-    migrate(db, [coreSchema, eventsSchema, queueItemsSchema]);
+    migrate(db, [coreSchema, eventsSchema, queueItemsSchema, rigArchiveSchema]);
     db.prepare(`INSERT INTO rigs (id, name) VALUES ('r-1', 'rig-alpha')`).run();
     db.prepare(`INSERT INTO rigs (id, name) VALUES ('r-2', 'rig-beta')`).run();
     bus = new EventBus(db);

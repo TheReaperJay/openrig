@@ -8,6 +8,7 @@ import { streamItemsSchema } from "../src/db/migrations/023_stream_items.js";
 import { queueItemsSchema } from "../src/db/migrations/024_queue_items.js";
 import { queueTransitionsSchema } from "../src/db/migrations/025_queue_transitions.js";
 import { viewsCustomSchema } from "../src/db/migrations/030_views_custom.js";
+import { rigArchiveSchema } from "../src/db/migrations/042_rig_archive.js";
 import { EventBus } from "../src/domain/event-bus.js";
 import { QueueRepository } from "../src/domain/queue-repository.js";
 import { StreamStore } from "../src/domain/stream-store.js";
@@ -32,7 +33,7 @@ describe("MissionControlReadLayer (PL-005 Phase A; 7 views)", () => {
     db = createDb();
     migrate(db, [
       coreSchema, eventsSchema, streamItemsSchema,
-      queueItemsSchema, queueTransitionsSchema, viewsCustomSchema,
+      queueItemsSchema, queueTransitionsSchema, viewsCustomSchema, rigArchiveSchema,
     ]);
     db.prepare(`INSERT INTO rigs (id, name) VALUES ('r-1', 'rig')`).run();
     bus = new EventBus(db);

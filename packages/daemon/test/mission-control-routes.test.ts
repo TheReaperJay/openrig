@@ -10,6 +10,7 @@ import { queueItemsSchema } from "../src/db/migrations/024_queue_items.js";
 import { queueTransitionsSchema } from "../src/db/migrations/025_queue_transitions.js";
 import { viewsCustomSchema } from "../src/db/migrations/030_views_custom.js";
 import { missionControlActionsSchema } from "../src/db/migrations/037_mission_control_actions.js";
+import { rigArchiveSchema } from "../src/db/migrations/042_rig_archive.js";
 import { EventBus } from "../src/domain/event-bus.js";
 import { QueueRepository } from "../src/domain/queue-repository.js";
 import { StreamStore } from "../src/domain/stream-store.js";
@@ -54,7 +55,7 @@ describe("mission-control routes (PL-005 Phase A)", () => {
     migrate(db, [
       coreSchema, eventsSchema, streamItemsSchema,
       queueItemsSchema, queueTransitionsSchema, viewsCustomSchema,
-      missionControlActionsSchema,
+      missionControlActionsSchema, rigArchiveSchema,
     ]);
     db.prepare(`INSERT INTO rigs (id, name) VALUES ('r-1', 'rig')`).run();
     bus = new EventBus(db);

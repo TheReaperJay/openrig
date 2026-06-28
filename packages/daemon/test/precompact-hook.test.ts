@@ -42,11 +42,12 @@ const BRIDGE_SCRIPT = resolve(
   "scripts",
   "compaction-restore-bridge.cjs",
 );
+const FIXTURE_TRANSCRIPT = resolve(HERE, "fixtures", "claude-sample-session.jsonl");
 const APPEND_MARKER = "Operator-configured post-compaction restore instruction";
 
-function runHook(openrigHome: string): { stdout: string; stderr: string; status: number | null } {
+function runHook(openrigHome: string, transcriptPath: string): { stdout: string; stderr: string; status: number | null } {
   const result = spawnSync(process.execPath, [HOOK_SCRIPT], {
-    input: JSON.stringify({}),
+    input: JSON.stringify({ transcript_path: transcriptPath }),
     encoding: "utf8",
     env: {
       ...process.env,
@@ -61,6 +62,12 @@ function runHook(openrigHome: string): { stdout: string; stderr: string; status:
     stderr: result.stderr || "",
     status: result.status,
   };
+}
+
+function loadFixtureTranscript(tmpDir: string): string {
+  const transcriptPath = join(tmpDir, "session.jsonl");
+  writeFileSync(transcriptPath, readFileSync(FIXTURE_TRANSCRIPT, "utf8"));
+  return transcriptPath;
 }
 
 function runBridge(openrigHome: string, input: Record<string, unknown> = {
@@ -140,7 +147,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       messageInline: "Operator says hi — remember the migration step.",
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
@@ -153,7 +160,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       messageInline: "Read the queue before resuming.",
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.systemMessage).toContain("pending restore marker");
@@ -193,7 +200,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       messageFilePath: messageFile,
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
@@ -210,7 +217,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       messageFilePath: "${OPENRIG_HOME}/instructions/restore.md",
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
@@ -221,7 +228,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
   it("HG-8: neither inline nor file-path set → no custom append (existing restore-instructions preserved)", () => {
     writePolicyConfig(openrigHome, { messageInline: "", messageFilePath: "" });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
@@ -235,7 +242,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       thresholdPercent: 80,
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
@@ -251,7 +258,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       messageFilePath: messageFile,
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.systemMessage).toContain("INLINE INCLUDED");
@@ -264,7 +271,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
       messageFilePath: join(tmpDir, "no-such-file.txt"),
     });
 
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
@@ -274,7 +281,7 @@ describe("precompact-hook.mjs (slice 27 custom message append)", () => {
 
   it("missing config.json: hook still emits restore-instructions (graceful degrade)", () => {
     // No config written — OPENRIG_HOME directory may not even exist.
-    const { stdout, status } = runHook(openrigHome);
+    const { stdout, status } = runHook(openrigHome, loadFixtureTranscript(tmpDir));
     expect(status).toBe(0);
     const payload = JSON.parse(stdout.trim());
     expect(payload.continue).toBe(true);
