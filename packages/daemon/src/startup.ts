@@ -175,6 +175,21 @@ interface DaemonOptions {
    * terminal preview/transport/websocket routes.
    */
   terminalBearerToken?: string | null;
+  /**
+   * Activity-hook shared secret used to authenticate POSTs to
+   * /api/activity/hooks from the in-harness plugin relays. Resolved +
+   * persisted by the production entry point (index.ts); passed in here
+   * so createDaemon stays a pure consumer with no fs side effects in
+   * tests. Undefined preserves the legacy "unconfigured" (503) route
+   * behavior for callers that don't supply one.
+   */
+  activityHookToken?: string;
+  /**
+   * Base URL the in-harness relays POST activity hooks to
+   * (e.g. http://127.0.0.1:7433). Derived from the daemon's real bound
+   * hosts + port at the production entry point (index.ts).
+   */
+  activityHookUrl?: string;
 }
 
 interface DaemonResult {
@@ -286,8 +301,14 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   // Read transcript config from env (passed by CLI via PNS-T02 config surface)
   const transcriptsEnabled = readOpenRigEnv("OPENRIG_TRANSCRIPTS_ENABLED", "RIGGED_TRANSCRIPTS_ENABLED") !== "false";
   const transcriptsPath = readOpenRigEnv("OPENRIG_TRANSCRIPTS_PATH", "RIGGED_TRANSCRIPTS_PATH") || undefined;
-  const activityHookToken = readOpenRigEnv("OPENRIG_ACTIVITY_HOOK_TOKEN", "RIGGED_ACTIVITY_HOOK_TOKEN") || undefined;
-  const activityHookUrl = readOpenRigEnv("OPENRIG_URL", "RIGGED_URL") || undefined;
+  // Activity-hook token + URL are resolved at the production entry point
+  // (index.ts), where the real bound hosts + port are known, and passed in
+  // via opts. Reading them from env here is intentionally avoided so the many
+  // tests that call createDaemon directly stay pure (no token-file side
+  // effects) and so the daemon uses the host it ACTUALLY bound (incl. the
+  // auto-detected tailscale IP) rather than whatever happened to be in env.
+  const activityHookToken = opts?.activityHookToken;
+  const activityHookUrl = opts?.activityHookUrl;
   const openRigPort = readOpenRigEnv("OPENRIG_PORT", "RIGGED_PORT") || undefined;
   const openRigHost = readOpenRigEnv("OPENRIG_HOST", "RIGGED_HOST") || undefined;
   const startupSettings = new ContextPackSettingsStore().resolveConfig();

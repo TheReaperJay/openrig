@@ -1,6 +1,7 @@
 import { serve, type ServerType } from "@hono/node-server";
-import { readOpenRigEnv } from "./openrig-compat.js";
+import { OPENRIG_HOME, readOpenRigEnv } from "./openrig-compat.js";
 import { createDaemon } from "./startup.js";
+import { deriveActivityHookUrl, resolveActivityToken } from "./domain/activity-token-store.js";
 import {
   assertBindAuthInvariant,
   detectTailscaleInterface,
@@ -68,10 +69,24 @@ export async function startServer(port?: number) {
     bindHosts = tailscaleIp ? ["127.0.0.1", tailscaleIp] : ["127.0.0.1"];
   }
 
+  // Resolve the activity-hook token + the OPENRIG_URL the in-harness relays
+  // POST to. Done here (the only production entry point) because this is the
+  // one place that knows the REAL bound hosts + port. Minting lives here, not
+  // inside createDaemon, so the ~20 tests that call createDaemon directly stay
+  // pure (no token-file side effects).
+  const activityHookToken = resolveActivityToken({
+    envOverride: readOpenRigEnv("OPENRIG_ACTIVITY_HOOK_TOKEN", "RIGGED_ACTIVITY_HOOK_TOKEN"),
+    homeDir: OPENRIG_HOME,
+  });
+  const activityHookUrl =
+    readOpenRigEnv("OPENRIG_URL", "RIGGED_URL") ?? deriveActivityHookUrl(bindHosts, p) ?? undefined;
+
   const { app, contextMonitor, deps, injectWebSocket } = await createDaemon({
     dbPath,
     bearerToken,
     terminalBearerToken,
+    activityHookToken,
+    activityHookUrl,
   });
 
   // Multi-bind via N serve() instances sharing the same Hono app.
