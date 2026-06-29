@@ -35,6 +35,7 @@ interface TempDirs {
   claudeCacheDir: string;
   codexCacheDir: string;
   specLibraryDir: string;
+  piExtensionsDir: string;
 }
 
 function setupTempDirs(): TempDirs {
@@ -43,11 +44,13 @@ function setupTempDirs(): TempDirs {
   const claudeCacheDir = join(root, "claude-cache");
   const codexCacheDir = join(root, "codex-cache");
   const specLibraryDir = join(root, "specs", "agents");
+  const piExtensionsDir = join(root, "pi-extensions");
   mkdirSync(openrigPluginsDir, { recursive: true });
   mkdirSync(claudeCacheDir, { recursive: true });
   mkdirSync(codexCacheDir, { recursive: true });
   mkdirSync(specLibraryDir, { recursive: true });
-  return { root, openrigPluginsDir, claudeCacheDir, codexCacheDir, specLibraryDir };
+  mkdirSync(piExtensionsDir, { recursive: true });
+  return { root, openrigPluginsDir, claudeCacheDir, codexCacheDir, specLibraryDir, piExtensionsDir };
 }
 
 function writeClaudePluginManifest(pluginDir: string, manifest: Record<string, unknown>): void {
@@ -60,6 +63,19 @@ function writeCodexPluginManifest(pluginDir: string, manifest: Record<string, un
   const manifestDir = join(pluginDir, ".codex-plugin");
   mkdirSync(manifestDir, { recursive: true });
   writeFileSync(join(manifestDir, "plugin.json"), JSON.stringify(manifest, null, 2));
+}
+
+// Writes a global Pi extension in the folder form: <id>/index.ts. Matches pi's
+// own auto-discovery rule (~/.pi/agent/extensions/<id>/index.ts).
+function writePiExtensionFolder(extensionsDir: string, id: string, body = "export default () => {};\n"): void {
+  const dir = join(extensionsDir, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "index.ts"), body);
+}
+
+// Writes a global Pi extension in the single-file form: <id>.ts.
+function writePiExtensionFile(extensionsDir: string, id: string, body = "export default () => {};\n"): void {
+  writeFileSync(join(extensionsDir, `${id}.ts`), body);
 }
 
 describe("PluginDiscoveryService", () => {
@@ -283,6 +299,118 @@ describe("PluginDiscoveryService", () => {
       expect(withCwd.find((p) => p.name === "ephemeral-tool")).toBeDefined();
     });
 
+    it("discovers global Pi extensions (folder form: <id>/index.ts)", () => {
+      writePiExtensionFolder(dirs.piExtensionsDir, "my-ext");
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        piExtensionsDir: dirs.piExtensionsDir,
+        specLibraryDir: dirs.specLibraryDir,
+      });
+      const pi = service.listPlugins().filter((p) => p.source === "pi-global");
+      expect(pi).toHaveLength(1);
+      expect(pi[0]).toMatchObject({
+        id: "my-ext",
+        name: "my-ext",
+        version: "unknown",
+        source: "pi-global",
+        sourceLabel: "pi-global:my-ext",
+        runtimes: ["pi"],
+        mandatory: false,
+      });
+    });
+
+    it("discovers global Pi extensions (single-file form: <id>.ts)", () => {
+      writePiExtensionFile(dirs.piExtensionsDir, "standalone-ext");
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        piExtensionsDir: dirs.piExtensionsDir,
+        specLibraryDir: dirs.specLibraryDir,
+      });
+      const pi = service.listPlugins().filter((p) => p.source === "pi-global");
+      expect(pi).toHaveLength(1);
+      expect(pi[0]).toMatchObject({
+        id: "standalone-ext",
+        source: "pi-global",
+        sourceLabel: "pi-global:standalone-ext",
+        runtimes: ["pi"],
+      });
+    });
+
+    it("skips non-.ts files in the Pi extensions dir (config/data, not extensions)", () => {
+      writePiExtensionFolder(dirs.piExtensionsDir, "real-ext");
+      writeFileSync(join(dirs.piExtensionsDir, "guardrails.json"), "{}");
+      // folder without index.ts is not a discoverable extension either
+      mkdirSync(join(dirs.piExtensionsDir, "no-index-folder"), { recursive: true });
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        piExtensionsDir: dirs.piExtensionsDir,
+        specLibraryDir: dirs.specLibraryDir,
+      });
+      const ids = service.listPlugins().filter((p) => p.source === "pi-global").map((p) => p.id);
+      expect(ids).toEqual(["real-ext"]);
+    });
+
+    it("marks openrig-core as mandatory; other plugins as not mandatory", () => {
+      writeClaudePluginManifest(join(dirs.openrigPluginsDir, "openrig-core"), {
+        name: "openrig-core",
+        version: "0.1.0",
+      });
+      writeClaudePluginManifest(join(dirs.openrigPluginsDir, "optional-plugin"), {
+        name: "optional-plugin",
+        version: "1.0.0",
+      });
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        specLibraryDir: dirs.specLibraryDir,
+      });
+      const plugins = service.listPlugins();
+      expect(plugins.find((p) => p.id === "openrig-core")?.mandatory).toBe(true);
+      expect(plugins.find((p) => p.id === "optional-plugin")?.mandatory).toBe(false);
+    });
+
+    it("scans rig-cwd <cwd>/.pi/extensions/* bundles (folder + file forms)", () => {
+      const rigCwd = join(dirs.root, "rig-cwd-pi");
+      const piBundlesDir = join(rigCwd, ".pi", "extensions");
+      mkdirSync(piBundlesDir, { recursive: true });
+      writePiExtensionFolder(piBundlesDir, "folder-ext");
+      writeFileSync(join(piBundlesDir, "file-ext.ts"), "export default () => {};\n");
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        specLibraryDir: dirs.specLibraryDir,
+        cwdScanRoots: [rigCwd],
+      });
+      const cwdPi = service
+        .listPlugins()
+        .filter((p) => p.source === "rig-cwd" && p.runtimes.includes("pi"));
+      expect(cwdPi.map((p) => p.id).sort()).toEqual([
+        `rig-cwd:${rigCwd}/.pi/extensions/file-ext`,
+        `rig-cwd:${rigCwd}/.pi/extensions/folder-ext`,
+      ]);
+    });
+
+    it("does not scan the global Pi dir when piExtensionsDir is omitted", () => {
+      // Omitting piExtensionsDir must skip the scan entirely (test isolation +
+      // back-compat with call sites that don't care about Pi).
+      writePiExtensionFolder(dirs.piExtensionsDir, "stray-ext");
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        specLibraryDir: dirs.specLibraryDir,
+      });
+      expect(service.listPlugins().some((p) => p.source === "pi-global")).toBe(false);
+    });
+
     it("filters by runtime when requested", () => {
       writeClaudePluginManifest(join(dirs.openrigPluginsDir, "claude-only"), {
         name: "claude-only",
@@ -421,6 +549,26 @@ describe("PluginDiscoveryService", () => {
       const detail = service.getPlugin(codexToolEntry!.id);
       expect(detail).not.toBeNull();
       expect(detail?.entry.name).toBe("codex-tool");
+    });
+
+    it("getPlugin self-resolves rig-cwd: Pi extension IDs too", () => {
+      const rigCwd = join(dirs.root, "rig-cwd-self-resolve-pi");
+      const piBundlesDir = join(rigCwd, ".pi", "extensions");
+      mkdirSync(piBundlesDir, { recursive: true });
+      writePiExtensionFolder(piBundlesDir, "pi-tool");
+      const service = new PluginDiscoveryService({
+        openrigPluginsDir: dirs.openrigPluginsDir,
+        claudeCacheDir: dirs.claudeCacheDir,
+        codexCacheDir: dirs.codexCacheDir,
+        specLibraryDir: dirs.specLibraryDir,
+      });
+      const listed = service.listPlugins({ cwdScanRoots: [rigCwd] });
+      const piEntry = listed.find((p) => p.source === "rig-cwd" && p.runtimes.includes("pi"));
+      expect(piEntry).toBeDefined();
+      const detail = service.getPlugin(piEntry!.id);
+      expect(detail).not.toBeNull();
+      expect(detail?.entry.name).toBe("pi-tool");
+      expect(detail?.entry.runtimes).toEqual(["pi"]);
     });
 
     it("slice 3.3 fix-iteration — getPlugin returns null for malformed rig-cwd: ids", () => {

@@ -887,6 +887,9 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
       openrigPluginsDir: getDefaultOpenRigPath("plugins"),
       claudeCacheDir: nodePath.join(os.homedir(), ".claude", "plugins", "cache"),
       codexCacheDir: nodePath.join(os.homedir(), ".codex", "plugins", "cache"),
+      // Global Pi extensions belong to the Pi runtime (homedir-anchored, same
+      // rationale as claudeCacheDir/codexCacheDir above), not OpenRig state.
+      piExtensionsDir: nodePath.join(os.homedir(), ".pi", "agent", "extensions"),
       specLibraryDir: getDefaultOpenRigPath("specs"),
     }),
     // Slice 28 Checkpoint C-3 — skillLibraryDiscoveryService is constructed

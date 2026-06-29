@@ -1,42 +1,39 @@
-// Phase 3a slice 3.3 — Plugin Discovery Service.
+// Plugin Discovery Service.
 //
-// SC-29 EXCEPTION #8 declared verbatim:
-// "Slice 3.3 (UI plugin surface) requires daemon-side plugin-discovery-service
-// + 3 HTTP routes (GET /api/plugins, GET /api/plugins/:id, GET /api/plugins/:id/used-by)
-// as backing API. No additional state, no SQL migration, no mutation routes.
-// Read-only discovery surface aggregating filesystem-scan unions per
-// DESIGN.md §5.4. Per IMPL-PRD §3.3 'Code touches' this allocation is explicit;
-// documenting in compliance with banked SC-29 verbatim-declaration rule."
+// Read-only registry that scans the filesystem for installed plugins and
+// exposes them to the Library UI via GET /api/plugins (+ /:id, /:id/used-by).
+// It is a derived view only — it never mutates state and performs no SQL.
 //
-// What it does (DESIGN.md §5.4 — auto-discovery library = derived view):
-//   - Scans 3 filesystem roots for plugin manifests:
-//       * ~/.openrig/plugins/<id>/                         (vendored)
-//       * ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/   (claude cache)
-//       * ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/    (codex cache)
-//   - Returns aggregated list with provenance labels per source root.
-//   - For getPlugin(id), reads .claude-plugin/plugin.json and/or .codex-plugin/plugin.json
-//     and summarizes the tree (skills/, hooks, mcp_servers, etc.) so the UI
-//     viewer can show what the plugin ships without re-reading files.
-//   - For findUsedBy(id), parses agent.yaml files in the spec library and
-//     walks resources.plugins[].id to collect references. Operates on parsed
-//     YAML structure (NOT string-grep) so comments + adjacent text don't
-//     produce false positives.
+// Sources scanned:
+//   - ~/.openrig/plugins/<id>/                              (vendored, e.g. openrig-core)
+//   - ~/.claude/plugins/cache/<mp>/<plugin>/<version>/      (Claude marketplace cache)
+//   - ~/.codex/plugins/cache/<mp>/<plugin>/<version>/       (Codex marketplace cache)
+//   - ~/.pi/agent/extensions/<id>.ts + <id>/index.ts        (global Pi extensions)
+//   - per-rig <cwd>/.claude|codex/plugins/* + .pi/extensions/*  (projected into a rig)
 //
-// Branch-merge-friendly: this service operates on filesystem reads + parsed
-// YAML; doesn't depend on batch 1's PluginResource type from
-// plugin-primitive-v0 branch. The agent YAML structure it reads
-// (resources.plugins[].id + profile.uses.plugins[]) is exactly what batch 1
-// produces, so post-merge the service continues to work unchanged.
+// getPlugin(id) summarizes a plugin's tree (skills/, hooks/, mcpServers) so the
+// UI detail viewer can show what a plugin ships without re-reading files.
+//
+// findUsedBy(id) parses agent.yaml files and walks resources.plugins[].id to
+// report which specs reference a plugin. It operates on parsed YAML (not
+// string-grep) so comments and adjacent text don't produce false positives.
+//
+// This service depends only on filesystem reads + parsed YAML. It reads the
+// agent.yaml plugin structure (resources.plugins[].id + profile.uses.plugins[])
+// directly, so it stays correct regardless of how plugin types evolve.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 export type PluginRuntime = "claude" | "codex" | "pi";
-// Slice 3.3 fix-C — `rig-cwd` source per DESIGN §5.4 union (4th category):
-// rig-bundled `<cwd>/.claude/plugins/*` + `<cwd>/.codex/plugins/*` (the
-// projection target from IMPL-PRD §1.2). velocity-qa VM verify failure #3.
-export type PluginSourceKind = "vendored" | "claude-cache" | "codex-cache" | "rig-cwd";
+// `rig-cwd` source: plugins projected into a specific rig's working dir
+// (<cwd>/.claude/plugins/*, <cwd>/.codex/plugins/*, <cwd>/.pi/extensions/*).
+// `pi-global` source: global Pi extensions auto-discovered from
+// ~/.pi/agent/extensions/ (single .ts files + <id>/index.ts folders). These
+// belong to the Pi runtime (like ~/.claude + ~/.codex caches), not OpenRig
+// state, so the dir is homedir-anchored.
+export type PluginSourceKind = "vendored" | "claude-cache" | "codex-cache" | "rig-cwd" | "pi-global";
 
 export interface PluginEntry {
   /** Stable id for routing (`openrig-core`, `<marketplace>:<plugin>:<version>`). */
@@ -50,10 +47,11 @@ export interface PluginEntry {
   /** Source root where this plugin was discovered. */
   source: PluginSourceKind;
   /**
-   * Human-readable provenance label per DESIGN.md §5.4 + IMPL-PRD §3.2:
+   * Human-readable provenance label:
    *   - `vendored:<plugin>`
    *   - `claude-cache:<marketplace>/<plugin>/<version>`
    *   - `codex-cache:<marketplace>/<plugin>/<version>`
+   *   - `pi-global:<id>` / `rig-cwd:<rig>/<...>`
    */
   sourceLabel: string;
   /** Which runtimes this plugin supports (presence of manifest dirs). */
@@ -62,22 +60,23 @@ export interface PluginEntry {
   path: string;
   /**
    * mtime of the manifest file (used as a soft "last loaded" approximation
-   * for the UI list view; exact "loaded by runtime" timestamp is out of
-   * scope at v0).
+   * for the UI list view).
    */
   lastSeenAt: string | null;
   /**
-   * Slice 28 — number of skill folders shipped under `<plugin>/skills/`.
-   * Surfaced in the list response so the PluginsIndexPage can render a
-   * skill-count column without an N+1 detail fetch per plugin row.
-   * Counted at detectPlugin time (one readdir of skills/).
-   *
-   * SC-29 EXCEPTION #11 (slice 28 library-explorer-finishing):
-   * adds skillCount field to PluginEntry — additive shape change to
-   * the plugin discovery API contract. Per banked inline-ledger
-   * discipline; declared verbatim in routes/plugins.ts header.
+   * Number of skill folders shipped under `<plugin>/skills/`. Surfaced in the
+   * list response so the Library can render a skill-count column without an
+   * N+1 detail fetch per plugin row. Counted once at detection time.
    */
   skillCount: number;
+  /**
+   * True for plugins OpenRig treats as mandatory infrastructure and projects
+   * unconditionally regardless of agent.yaml (e.g. the telemetry plugin — see
+   * the adapters' "MANDATORY TELEMETRY PLUGIN PROJECTION" blocks). Read-only UX
+   * flag: the Library renders a "Mandatory / Infrastructure" badge for these.
+   * NOT an enable/disable state — there is no opt-out for infra plugins.
+   */
+  mandatory: boolean;
 }
 
 export interface PluginManifestSummary {
@@ -108,13 +107,12 @@ export interface PluginHookSummary {
   events: string[];
 }
 
-// Slice 3.3 fix-A — MCP server discovery (DESIGN §5.7 + IMPL-PRD §3.2).
-// MCP servers shipped via plugins are handled by the runtime's plugin
-// loader; OpenRig only surfaces what the manifest declares so the UI
-// viewer can list "this plugin ships these MCP servers." Implementation:
-// read manifest.mcpServers (Claude/Codex spec key) and emit one summary
-// per declared server. Best-effort: when the field is missing or shaped
-// differently, we return [] rather than throwing.
+// MCP server declarations surfaced from a plugin's manifest. The runtime's
+// plugin loader actually wires these servers; OpenRig only reads what the
+// manifest declares so the UI can list "this plugin ships these MCP servers."
+// Reads manifest.mcpServers (the Claude/Codex spec key) and emits one summary
+// per declared server. Best-effort: a missing or oddly-shaped field yields []
+// rather than throwing.
 export interface PluginMcpServerSummary {
   /** Which runtime manifest declared this MCP server. */
   runtime: PluginRuntime;
@@ -137,10 +135,7 @@ export interface PluginDetail {
   skills: PluginSkillSummary[];
   /** Hook configs shipped under `<plugin>/hooks/`. */
   hooks: PluginHookSummary[];
-  /**
-   * MCP server declarations from claude/codex manifest's `mcpServers`
-   * field. Slice 3.3 fix-A — velocity-qa VM verify failure #1.
-   */
+  /** MCP server declarations from the claude/codex manifest's `mcpServers` field. */
   mcpServers: PluginMcpServerSummary[];
 }
 
@@ -161,19 +156,24 @@ export interface PluginDiscoveryServiceOpts {
   /** Root directory for Codex plugin cache (typically ~/.codex/plugins/cache). */
   codexCacheDir: string;
   /**
-   * Spec library directory containing agent.yaml files (recursively scanned).
-   * Typically the daemon's resolved spec library root. May be a single root
-   * for v0; expand to multi-root in a later slice if the spec library hooks
-   * its full root list through.
+   * Root directory for global Pi extensions (typically ~/.pi/agent/extensions).
+   * Optional: when absent, the global Pi scan is skipped (keeps existing call
+   * sites and tests isolated from a real home dir). Pi extensions are
+   * auto-discovered as single `.ts` files and `<id>/index.ts` folders (per pi's
+   * own auto-discovery rules). Project-local <cwd>/.pi/extensions/* are scanned
+   * separately via cwdScanRoots.
+   */
+  piExtensionsDir?: string;
+  /**
+   * Spec library directory containing agent.yaml files (recursively scanned)
+   * for findUsedBy. Typically the daemon's resolved spec library root.
    */
   specLibraryDir: string;
   /**
-   * Slice 3.3 fix-C — optional rig cwd roots whose `.claude/plugins/*` +
-   * `.codex/plugins/*` subdirectories get scanned for rig-bundled
-   * plugins (the projection target from IMPL-PRD §1.2). Default empty.
-   * Population at v0 is per-call via listPlugins({ cwdScanRoots }) from
-   * the API layer (?cwd=<path>); future slices may add automatic
-   * enumeration from running-rig state.
+   * Optional rig cwd roots whose `.claude/plugins/*`, `.codex/plugins/*`, and
+   * `.pi/extensions/*` subdirectories get scanned for plugins projected into a
+   * specific rig. Default empty. Typically populated per-call from the API
+   * layer's ?cwd=<path> query param rather than at construction.
    */
   cwdScanRoots?: string[];
 }
@@ -184,10 +184,9 @@ export interface ListPluginsOpts {
   /** Filter to plugins from a specific source root. */
   sourceFilter?: PluginSourceKind;
   /**
-   * Slice 3.3 fix-C — per-call rig cwd roots; overrides constructor option.
-   * Each cwd contributes `<cwd>/.claude/plugins/*` + `<cwd>/.codex/plugins/*`
-   * discoveries labeled `rig-cwd:<plugin>`. The API layer passes a single
-   * `?cwd=<path>` query param down here.
+   * Per-call rig cwd roots; overrides the constructor option. Each cwd
+   * contributes plugins projected into that rig. The API layer passes a single
+   * ?cwd=<path> query param down here.
    */
   cwdScanRoots?: string[];
 }
@@ -195,6 +194,15 @@ export interface ListPluginsOpts {
 const CLAUDE_MANIFEST_REL = ".claude-plugin/plugin.json";
 const CODEX_MANIFEST_REL = ".codex-plugin/plugin.json";
 const PI_MANIFEST_REL = ".pi-plugin/plugin.json";
+
+/**
+ * Plugin ids OpenRig treats as mandatory infrastructure and projects
+ * unconditionally (independent of agent.yaml — see the adapters' "MANDATORY
+ * TELEMETRY PLUGIN PROJECTION" blocks). Surfaced read-only in the Library UX
+ * so the mandatory badge distinguishes infra from optional/user plugins.
+ * Add ids here as more infra-grade plugins ship.
+ */
+const MANDATORY_INFRA_PLUGIN_IDS = new Set<string>(["openrig-core"]);
 
 export class PluginDiscoveryService {
   private readonly opts: PluginDiscoveryServiceOpts;
@@ -206,7 +214,7 @@ export class PluginDiscoveryService {
   listPlugins(filterOpts: ListPluginsOpts = {}): PluginEntry[] {
     const out: PluginEntry[] = [];
 
-    // 1. Vendored OpenRig plugins.
+    // Vendored OpenRig plugins.
     if (existsSync(this.opts.openrigPluginsDir)) {
       for (const entry of safeReaddir(this.opts.openrigPluginsDir)) {
         const pluginPath = join(this.opts.openrigPluginsDir, entry);
@@ -216,7 +224,7 @@ export class PluginDiscoveryService {
       }
     }
 
-    // 2. Claude Code cache: ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/
+    // Claude Code cache: ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/
     if (existsSync(this.opts.claudeCacheDir)) {
       for (const marketplace of safeReaddir(this.opts.claudeCacheDir)) {
         const marketplacePath = join(this.opts.claudeCacheDir, marketplace);
@@ -236,7 +244,7 @@ export class PluginDiscoveryService {
       }
     }
 
-    // 3. Codex cache: ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/
+    // Codex cache: ~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/
     if (existsSync(this.opts.codexCacheDir)) {
       for (const marketplace of safeReaddir(this.opts.codexCacheDir)) {
         const marketplacePath = join(this.opts.codexCacheDir, marketplace);
@@ -256,11 +264,36 @@ export class PluginDiscoveryService {
       }
     }
 
-    // 4. Slice 3.3 fix-C — rig-bundled cwd plugin roots.
-    // Per-call opts override constructor opts; effective cwd set is the
-    // union when both are present (per-call wins by replacement, NOT
-    // append-to-constructor, because the API layer's ?cwd=<path> intent
-    // is "ALL plugins this specific rig sees" — predictable + cacheable).
+    // Global Pi extensions: ~/.pi/agent/extensions/<id>.ts (single file) +
+    // ~/.pi/agent/extensions/<id>/index.ts (folder). These are pi's own
+    // auto-discovery forms (per pi's extensions doc "Extension Locations");
+    // they carry no manifest, so detectPiExtension derives metadata from the
+    // path. Non-.ts files (e.g. .json config/data consumed by extensions) are
+    // skipped — pi does not auto-discover them.
+    if (this.opts.piExtensionsDir && existsSync(this.opts.piExtensionsDir)) {
+      for (const entry of safeReaddir(this.opts.piExtensionsDir)) {
+        const extensionPath = join(this.opts.piExtensionsDir, entry);
+        if (isDir(extensionPath)) {
+          const indexPath = join(extensionPath, "index.ts");
+          if (!existsSync(indexPath)) continue;
+          const detected = this.detectPiExtension(
+            extensionPath, "pi-global", entry, entry, `pi-global:${entry}`, indexPath,
+          );
+          if (detected) out.push(detected);
+        } else if (entry.endsWith(".ts")) {
+          const id = entry.slice(0, -3);
+          const detected = this.detectPiExtension(
+            extensionPath, "pi-global", id, id, `pi-global:${id}`, extensionPath,
+          );
+          if (detected) out.push(detected);
+        }
+      }
+    }
+
+    // Rig-bundled cwd plugin roots. Per-call opts override constructor opts
+    // (per-call wins by replacement, NOT append-to-constructor, because the API
+    // layer's ?cwd=<path> intent is "ALL plugins this specific rig sees" —
+    // predictable + cacheable).
     const effectiveCwds = filterOpts.cwdScanRoots ?? this.opts.cwdScanRoots ?? [];
     for (const cwd of effectiveCwds) {
       this.scanCwdBundledPlugins(cwd, out);
@@ -276,11 +309,11 @@ export class PluginDiscoveryService {
     return filtered;
   }
 
-  // Slice 3.3 fix-C — scan a single rig cwd for `.claude/plugins/*` +
-  // `.codex/plugins/*` bundles. Emits one PluginEntry per discovered
-  // plugin manifest (matches the same detection rule as the other
-  // source roots: presence of `.claude-plugin/plugin.json` and/or
-  // `.codex-plugin/plugin.json` inside the plugin folder).
+  // Scan a single rig cwd for `.claude/plugins/*`, `.codex/plugins/*`, and
+  // `.pi/extensions/*` bundles. Emits one PluginEntry per discovered plugin.
+  // Claude/Codex bundles are detected by manifest (`.claude-plugin/plugin.json`
+  // / `.codex-plugin/plugin.json`); Pi bundles follow pi's auto-discovery rule
+  // (`<id>/index.ts` folder or `<id>.ts` file).
   private scanCwdBundledPlugins(cwd: string, out: PluginEntry[]): void {
     if (!existsSync(cwd)) return;
     const claudePluginsDir = join(cwd, ".claude", "plugins");
@@ -305,19 +338,39 @@ export class PluginDiscoveryService {
         if (detected) out.push(detected);
       }
     }
+
+    // Project-local Pi extensions: <cwd>/.pi/extensions/<id>.ts +
+    // <cwd>/.pi/extensions/<id>/index.ts (the Pi adapter's projection target,
+    // incl. openrig-core). Detection mirrors pi's auto-discovery rules.
+    const piExtDir = join(cwd, ".pi", "extensions");
+    if (existsSync(piExtDir)) {
+      for (const entry of safeReaddir(piExtDir)) {
+        const extensionPath = join(piExtDir, entry);
+        if (isDir(extensionPath)) {
+          const indexPath = join(extensionPath, "index.ts");
+          if (!existsSync(indexPath)) continue;
+          const id = `rig-cwd:${cwd}/.pi/extensions/${entry}`;
+          const sourceLabel = `rig-cwd:${basename(cwd)}/.pi/extensions/${entry}`;
+          const detected = this.detectPiExtension(extensionPath, "rig-cwd", id, entry, sourceLabel, indexPath);
+          if (detected) out.push(detected);
+        } else if (entry.endsWith(".ts")) {
+          const id = `rig-cwd:${cwd}/.pi/extensions/${entry.slice(0, -3)}`;
+          const sourceLabel = `rig-cwd:${basename(cwd)}/.pi/extensions/${entry}`;
+          const detected = this.detectPiExtension(extensionPath, "rig-cwd", id, entry.slice(0, -3), sourceLabel, extensionPath);
+          if (detected) out.push(detected);
+        }
+      }
+    }
   }
 
   getPlugin(id: string): PluginDetail | null {
-    // Slice 3.3 fix-iteration — rig-cwd: IDs are self-resolvable.
-    // Pre-fix, getPlugin called this.listPlugins() (no opts), which
-    // excluded rig-cwd entries because cwdScanRoots is empty by default.
-    // Result: /api/plugins?cwd= returned a rig-cwd id, /api/plugins/:id
-    // 404'd on the same id (redo-guard-2 BLOCK item 1). Fix: parse the
-    // cwd out of the rig-cwd: prefix and pass it as cwdScanRoots so
-    // the entry is in the list. ID format constructed in
-    // scanCwdBundledPlugins:
+    // rig-cwd: ids are self-resolvable. listPlugins() only includes cwd
+    // discoveries when given cwdScanRoots, so to look up a rig-cwd plugin we
+    // parse the cwd back out of the id and re-scan that cwd. ID format (built
+    // in scanCwdBundledPlugins):
     //   rig-cwd:<cwd>/.claude/plugins/<plugin>
     //   rig-cwd:<cwd>/.codex/plugins/<plugin>
+    //   rig-cwd:<cwd>/.pi/extensions/<plugin>
     const cwdScanRoots = extractCwdFromRigCwdId(id);
     const entry = this.listPlugins(cwdScanRoots ? { cwdScanRoots } : {}).find((p) => p.id === id);
     if (!entry) return null;
@@ -360,7 +413,7 @@ export class PluginDiscoveryService {
       }
     }
 
-    // Slice 3.3 fix-A — MCP server discovery from each runtime's manifest.
+    // MCP server discovery from each runtime's manifest.
     const mcpServers: PluginMcpServerSummary[] = [
       ...readMcpServers(claudeManifest, "claude"),
       ...readMcpServers(codexManifest, "codex"),
@@ -429,11 +482,9 @@ export class PluginDiscoveryService {
       lastSeenAt = null;
     }
 
-    // Slice 28 — skillCount: count subdirectories under <plugin>/skills/.
-    // Matches the detail-side enumeration in getPlugin() which also
-    // collects subdirs under that path (no .md filtering at this level
-    // — every shipped skill folder counts, whether or not it has
-    // landed a SKILL.md yet).
+    // Count skill subdirectories under <plugin>/skills/. Matches the
+    // detail-side enumeration in getPlugin() (every shipped skill folder
+    // counts, whether or not it has landed a SKILL.md yet).
     let skillCount = 0;
     const skillsDir = join(pluginPath, "skills");
     if (existsSync(skillsDir)) {
@@ -453,31 +504,74 @@ export class PluginDiscoveryService {
       path: pluginPath,
       lastSeenAt,
       skillCount,
+      mandatory: MANDATORY_INFRA_PLUGIN_IDS.has(explicitId),
+    };
+  }
+
+  // Detect a pure Pi extension. Unlike detectPlugin (which requires a
+  // .claude-plugin/.codex-plugin/.pi-plugin manifest), Pi extensions are
+  // auto-discovered by pi as single `.ts` files or `<id>/index.ts` folders —
+  // no manifest. Name/version are derived from the path; runtimes is always
+  // ["pi"]. `entryFile` is the discovered entry (.ts file or <id>/index.ts),
+  // used for the lastSeenAt mtime.
+  private detectPiExtension(
+    extensionPath: string,
+    source: PluginSourceKind,
+    explicitId: string,
+    name: string,
+    sourceLabel: string,
+    entryFile: string,
+  ): PluginEntry | null {
+    let lastSeenAt: string | null = null;
+    try {
+      lastSeenAt = statSync(entryFile).mtime.toISOString();
+    } catch {
+      lastSeenAt = null;
+    }
+    let skillCount = 0;
+    const skillsDir = join(extensionPath, "skills");
+    if (isDir(skillsDir)) {
+      for (const e of safeReaddir(skillsDir)) {
+        if (isDir(join(skillsDir, e))) skillCount += 1;
+      }
+    }
+    return {
+      id: explicitId,
+      name,
+      version: "unknown",
+      description: null,
+      source,
+      sourceLabel,
+      runtimes: ["pi"],
+      path: extensionPath,
+      lastSeenAt,
+      skillCount,
+      mandatory: MANDATORY_INFRA_PLUGIN_IDS.has(explicitId),
     };
   }
 }
 
-// Slice 3.3 fix-iteration — parse cwd from a rig-cwd: id so getPlugin
-// can re-scan that cwd before the lookup. Returns the cwd in a
-// single-element array (caller passes as cwdScanRoots) or null when
-// the id is not a rig-cwd: id, can't be parsed, or both manifest dir
-// markers are absent. Tolerant of both `/.claude/plugins/` and
-// `/.codex/plugins/` markers (whichever appears first wins; in the
-// canonical id one of them is always present).
+// Parse the cwd out of a rig-cwd: id so getPlugin can re-scan that cwd before
+// the lookup. Returns the cwd in a single-element array (caller passes it as
+// cwdScanRoots) or null when the id is not a rig-cwd: id or has no recognizable
+// marker. Tolerant of `/.claude/plugins/`, `/.codex/plugins/`, and
+// `/.pi/extensions/` markers (the earliest one wins; a canonical id has one).
 const RIG_CWD_PREFIX = "rig-cwd:";
 const CLAUDE_MARKER = "/.claude/plugins/";
 const CODEX_MARKER = "/.codex/plugins/";
+const PI_MARKER = "/.pi/extensions/";
 function extractCwdFromRigCwdId(id: string): string[] | null {
   if (!id.startsWith(RIG_CWD_PREFIX)) return null;
   const rest = id.slice(RIG_CWD_PREFIX.length);
   const claudeIdx = rest.indexOf(CLAUDE_MARKER);
   const codexIdx = rest.indexOf(CODEX_MARKER);
+  const piIdx = rest.indexOf(PI_MARKER);
+  // Whichever marker appears earliest wins; a canonical id contains exactly one.
   let cwd: string | null = null;
-  if (claudeIdx >= 0 && (codexIdx < 0 || claudeIdx < codexIdx)) {
-    cwd = rest.slice(0, claudeIdx);
-  } else if (codexIdx >= 0) {
-    cwd = rest.slice(0, codexIdx);
-  }
+  let earliest = Infinity;
+  if (claudeIdx >= 0 && claudeIdx < earliest) { cwd = rest.slice(0, claudeIdx); earliest = claudeIdx; }
+  if (codexIdx >= 0 && codexIdx < earliest) { cwd = rest.slice(0, codexIdx); earliest = codexIdx; }
+  if (piIdx >= 0 && piIdx < earliest) { cwd = rest.slice(0, piIdx); earliest = piIdx; }
   if (!cwd) return null;
   return [cwd];
 }
@@ -516,10 +610,10 @@ function readManifest(manifestPath: string): PluginManifestSummary | null {
   }
 }
 
-// Slice 3.3 fix-A — read MCP server declarations from a manifest's
-// `mcpServers` field. The Claude/Codex plugin spec convention is
-// mcpServers: { <name>: { command, args, transport, ... } }. We
-// surface the names + best-effort command/transport for the UI.
+// Read MCP server declarations from a manifest's `mcpServers` field. The
+// Claude/Codex plugin spec convention is
+// mcpServers: { <name>: { command, args, transport, ... } }. We surface the
+// names + best-effort command/transport for the UI.
 function readMcpServers(
   manifest: PluginManifestSummary | null,
   runtime: PluginRuntime,

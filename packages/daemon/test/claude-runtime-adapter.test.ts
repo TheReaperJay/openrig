@@ -349,6 +349,24 @@ describe("Claude Code runtime adapter", () => {
     expect(result.failed[0]!.error).toContain("must be a JSON object");
   });
 
+  it("projects telemetry even when the plan has no plugin entries (no plugins: declaration needed)", async () => {
+    // Telemetry is mandatory infrastructure projected by the adapter itself,
+    // not driven by agent.yaml. A seat whose spec declares no plugins: block
+    // at all still gets openrig-core projected — this is the contract that lets
+    // shared/agent.yaml ship an empty plugins: [] list.
+    const fs = mockFs();
+    const adapter = new ClaudeCodeAdapter({ tmux: mockTmux(), fsOps: fs });
+    const plan: ProjectionPlan = {
+      runtime: "claude-code", cwd: "/project",
+      entries: [],
+      startup: { files: [], actions: [] }, conflicts: [], noOps: [], diagnostics: [],
+    };
+    const result = await adapter.project(plan, makeBinding());
+    expect(result.projected).toEqual(["openrig-core [mandatory telemetry]"]);
+    expect(result.skipped).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
   // NS-T04: launchHarness tests
   it("launchHarness sends correct fresh launch command", async () => {
     const tmux = mockTmux();

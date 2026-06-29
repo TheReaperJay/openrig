@@ -198,6 +198,26 @@ function PluginsSection({
                   <ToolMark tool="skill" title={`${plugin.name} plugin`} size="xs" decorative />
                   <span className="truncate text-xs font-bold text-stone-900">{plugin.name}</span>
                 </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  {plugin.mandatory ? (
+                    <span
+                      data-testid={`library-plugin-mandatory-${plugin.id}`}
+                      title="Mandatory infrastructure — always projected, not toggleable"
+                      className="rounded-sm bg-amber-200/70 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-900"
+                    >
+                      Mandatory
+                    </span>
+                  ) : null}
+                  {plugin.runtimes.map((rt) => (
+                    <span
+                      key={rt}
+                      data-testid={`library-plugin-runtime-${plugin.id}-${rt}`}
+                      className="rounded-sm bg-stone-200/70 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide text-stone-700"
+                    >
+                      {rt}
+                    </span>
+                  ))}
+                </span>
               </Link>
             </li>
           ))}

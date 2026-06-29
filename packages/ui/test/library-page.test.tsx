@@ -293,6 +293,8 @@ describe("Library page taxonomy", () => {
               runtimes: ["claude", "codex"],
               path: "/x/openrig-core",
               lastSeenAt: null,
+              skillCount: 0,
+              mandatory: true,
             },
             {
               id: "claude-cache:anthropics/github/1.0.0",
@@ -304,6 +306,8 @@ describe("Library page taxonomy", () => {
               runtimes: ["claude"],
               path: "/y/github",
               lastSeenAt: null,
+              skillCount: 0,
+              mandatory: false,
             },
           ],
         };
@@ -334,6 +338,13 @@ describe("Library page taxonomy", () => {
     expect(openrigPlugin.textContent).not.toContain("vendored:openrig-core");
     expect(githubPlugin.textContent).not.toContain("1.0.0");
     expect(githubPlugin.textContent).not.toContain("claude-cache:anthropics/github/1.0.0");
+
+    // Mandatory badge renders only for the infra plugin; runtime chips render for both.
+    expect(within(openrigPlugin).getByTestId("library-plugin-mandatory-openrig-core")).toBeDefined();
+    expect(within(githubPlugin).queryByTestId("library-plugin-mandatory-claude-cache:anthropics/github/1.0.0")).toBeNull();
+    expect(within(openrigPlugin).getByTestId("library-plugin-runtime-openrig-core-claude")).toBeDefined();
+    expect(within(openrigPlugin).getByTestId("library-plugin-runtime-openrig-core-codex")).toBeDefined();
+    expect(within(githubPlugin).getByTestId("library-plugin-runtime-claude-cache:anthropics/github/1.0.0-claude")).toBeDefined();
   });
 
   it("auto-expands the skills explorer on skill detail routes", async () => {

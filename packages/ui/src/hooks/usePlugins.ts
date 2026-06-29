@@ -10,8 +10,11 @@
 
 import { useQuery } from "@tanstack/react-query";
 
-export type PluginRuntime = "claude" | "codex";
-export type PluginSourceKind = "vendored" | "claude-cache" | "codex-cache";
+// Mirrors the daemon's PluginRuntime / PluginSourceKind from
+// packages/daemon/src/domain/plugin-discovery-service.ts. Kept in lockstep;
+// if the daemon shapes evolve, update both sides.
+export type PluginRuntime = "claude" | "codex" | "pi";
+export type PluginSourceKind = "vendored" | "claude-cache" | "codex-cache" | "rig-cwd" | "pi-global";
 
 export interface PluginEntry {
   id: string;
@@ -26,6 +29,9 @@ export interface PluginEntry {
   /** Slice 28 — subdirectory count under <plugin>/skills/. Populated by
    *  daemon detectPlugin via readdir of skills/ (SC-29 EXCEPTION #11). */
   skillCount: number;
+  /** True for plugins OpenRig projects unconditionally as infrastructure.
+   *  Read-only: rendered as a badge, not toggleable. */
+  mandatory: boolean;
 }
 
 export interface PluginManifestSummary {
