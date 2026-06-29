@@ -1,6 +1,7 @@
 // OPR.0.3.3.13.1 - CLI surface-detection parser POC tests (AC-1..AC-5).
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 
@@ -29,6 +30,30 @@ function readSource(rel: string): { name: string; text: string } {
 
 const FROM = "v0.3.1";
 const TO = "v0.3.2";
+
+// The worked-example (AC-2) and determinism (AC-4) tests read the CLI command
+// source tree at these release refs via `git ls-tree`. The tags live on the
+// upstream OpenRig repo (github.com/mvschwarz/openrig), not on the fork, so a
+// fresh checkout is missing them. Fail loud and actionable instead of the
+// cryptic `git ls-tree` SurfaceParserError — the user must add upstream.
+function refExists(ref: string): boolean {
+  try {
+    execSync(`git rev-parse --verify ${ref}^{commit}`, { cwd: here, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const missingRefs = [FROM, TO].filter((r) => !refExists(r));
+if (missingRefs.length > 0) {
+  throw new Error(
+    `release-surface tests require git refs ${FROM} and ${TO}, but ${missingRefs.join(", ")} ${missingRefs.length === 1 ? "is" : "are"} not resolvable in this checkout.\n` +
+    `These release tags live on the upstream OpenRig repo, not the fork. Add the upstream remote and fetch its tags (read-only, local — does not modify your branch or push anything):\n` +
+    `  git remote add upstream https://github.com/mvschwarz/openrig\n` +
+    `  git fetch upstream --tags\n` +
+    `Then re-run.`,
+  );
+}
 
 describe("release-surface parser - extract (unit)", () => {
   it("AC-2 crux: emits the registration name `policy`, never the filename `rig-policy`", () => {

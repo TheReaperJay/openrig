@@ -198,7 +198,8 @@ export function runDoctorChecks(deps: DoctorDeps): { checks: DoctorCheck[]; port
     }
     // Port in use — check if it's our daemon via healthz
     try {
-      const res = await fetch(`http://127.0.0.1:${DEFAULT_PORT}/healthz`);
+      const fetchFn = deps.fetch ?? globalThis.fetch;
+      const res = await fetchFn(`http://127.0.0.1:${DEFAULT_PORT}/healthz`);
       if (res.ok) {
         return { name: "port", status: "pass", message: `Port ${DEFAULT_PORT} in use by OpenRig daemon.` };
       }

@@ -306,7 +306,7 @@ describe("Preflight CLI", () => {
     const homeDir = join(tmpDir, ".openrig");
     mkdirSync(homeDir, { recursive: true });
     const cmd = preflightCommand({
-      exec: makeExec(false), // tmux missing
+      exec: makeExec("missing"), // tmux missing
       configPath: join(tmpDir, "config.json"),
       riggedHome: homeDir,
       getDaemonStatus: makeStatus(),

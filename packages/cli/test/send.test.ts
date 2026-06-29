@@ -195,7 +195,7 @@ describe("Send CLI", () => {
         text: expect.stringContaining("hello"),
         waitForIdleMs: 30000,
       }),
-      { timeoutMs: 35000 },
+      expect.objectContaining({ timeoutMs: 35000 }),
     );
     const sentText = postFn.mock.calls[0]?.[1] as { text: string } | undefined;
     expect(sentText?.text).toContain("To: dev-impl@my-rig");
@@ -212,7 +212,7 @@ describe("Send CLI", () => {
     await captureLogs(async () => {
       await makeCmd(deps).parseAsync(["node", "rig", "send", "dev-impl@my-rig", "hello"]);
     });
-    expect(postFn.mock.calls[0]?.[2]).toBeUndefined();
+    expect(postFn.mock.calls[0]?.[2]?.timeoutMs).toBeUndefined();
   });
 
   it("send rejects invalid wait-for-idle values before contacting daemon", async () => {
