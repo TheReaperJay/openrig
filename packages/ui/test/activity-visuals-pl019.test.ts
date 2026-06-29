@@ -12,7 +12,6 @@ import {
   getActivityBgClass,
   getActivityTextClass,
   getActivityAnimationClass,
-  isActivityStale,
   shortQitemTail,
   type ActivityState,
 } from "../src/lib/activity-visuals.js";
@@ -28,7 +27,7 @@ describe("PL-019 activity-visuals", () => {
 
     it("returns the state from the activity payload", () => {
       for (const state of STATES) {
-        expect(getActivityState({ state, reason: "x", evidenceSource: "y", sampledAt: "z" })).toBe(state);
+        expect(getActivityState({ state, reason: "x", evidenceSource: "runtime_hook", sampledAt: "z" })).toBe(state);
       }
     });
   });
@@ -76,31 +75,6 @@ describe("PL-019 activity-visuals", () => {
     it("idle and unknown never animate (no motion)", () => {
       expect(getActivityAnimationClass("idle")).toBe("");
       expect(getActivityAnimationClass("unknown")).toBe("");
-    });
-  });
-
-  describe("isActivityStale", () => {
-    it("returns false when activity is null/undefined", () => {
-      expect(isActivityStale(null)).toBe(false);
-      expect(isActivityStale(undefined)).toBe(false);
-    });
-
-    it("returns true when explicit staleness exceeds threshold (~30s)", () => {
-      expect(isActivityStale({ state: "idle", reason: "x", evidenceSource: "y", sampledAt: "2026-05-04T00:00:00.000Z", staleness: 60 })).toBe(true);
-    });
-
-    it("returns false when explicit staleness is within threshold", () => {
-      expect(isActivityStale({ state: "idle", reason: "x", evidenceSource: "y", sampledAt: "2026-05-04T00:00:00.000Z", staleness: 5 })).toBe(false);
-    });
-
-    it("falls back to age-from-sampledAt when staleness is missing", () => {
-      const longAgo = new Date(Date.now() - 120_000).toISOString();
-      expect(isActivityStale({ state: "idle", reason: "x", evidenceSource: "y", sampledAt: longAgo })).toBe(true);
-    });
-
-    it("returns false for fresh sampledAt without explicit staleness", () => {
-      const fresh = new Date(Date.now() - 1_000).toISOString();
-      expect(isActivityStale({ state: "running", reason: "x", evidenceSource: "y", sampledAt: fresh })).toBe(false);
     });
   });
 
@@ -169,14 +143,6 @@ describe("PL-019 activity-visuals", () => {
       expect(r).toEqual({ state: "idle", source: "terminal_activity" });
     });
 
-    it("pane_heuristic running + terminalActive=null => source pane_heuristic (not hook)", () => {
-      const r = getActivityStateWithSource(
-        { state: "running", reason: "x", evidenceSource: "pane_heuristic", sampledAt: "z" },
-        null,
-      );
-      expect(r).toEqual({ state: "running", source: "pane_heuristic" });
-    });
-
     it("unknown pane_heuristic + terminalActive=null => source none (not hook)", () => {
       const r = getActivityStateWithSource(
         { state: "unknown", reason: "capture_failed", evidenceSource: "pane_heuristic", sampledAt: "z" },
@@ -194,37 +160,21 @@ describe("PL-019 activity-visuals", () => {
       expect(r).toEqual({ state: "unknown", source: "none" });
     });
 
-    it("stale non-unknown runtime_hook + terminalActive=null => source none (not hook)", () => {
+    it("aged runtime_hook (old sampledAt) still resolves to source=hook (no stale decay)", () => {
+      const longAgo = new Date(Date.now() - 120_000).toISOString();
       const r = getActivityStateWithSource(
-        { state: "running", reason: "stale_runtime_hook", evidenceSource: "runtime_hook", sampledAt: "z", stale: true },
+        { state: "running", reason: "user_prompt_submit", evidenceSource: "runtime_hook", sampledAt: longAgo },
         null,
       );
-      expect(r.source).not.toBe("hook");
-      expect(r).toEqual({ state: "running", source: "none" });
+      expect(r).toEqual({ state: "running", source: "hook" });
     });
 
-    it("tmux_session running + terminalActive=null => source none (not hook)", () => {
-      const r = getActivityStateWithSource(
-        { state: "running", reason: "x", evidenceSource: "tmux_session", sampledAt: "z" },
-        null,
-      );
-      expect(r).toEqual({ state: "running", source: "none" });
-    });
-
-    it("session_registry running + terminalActive=null => source none", () => {
-      const r = getActivityStateWithSource(
-        { state: "running", reason: "x", evidenceSource: "session_registry", sampledAt: "z" },
-        null,
-      );
-      expect(r).toEqual({ state: "running", source: "none" });
-    });
-
-    it("unrecognized evidenceSource running + terminalActive=null => source none", () => {
+    it("unrecognized evidenceSource + terminalActive=null => ignored, source none (unknown)", () => {
       const r = getActivityStateWithSource(
         { state: "running", reason: "x", evidenceSource: "test_custom", sampledAt: "z" },
         null,
       );
-      expect(r).toEqual({ state: "running", source: "none" });
+      expect(r).toEqual({ state: "unknown", source: "none" });
     });
 
     it("runtime_hook running (fresh, not stale) always source=hook regardless of terminalActive", () => {
@@ -237,7 +187,7 @@ describe("PL-019 activity-visuals", () => {
 
     it("backward compat: single-arg getActivityState still works", () => {
       expect(getActivityState(null)).toBe("unknown");
-      expect(getActivityState({ state: "running", reason: "x", evidenceSource: "y", sampledAt: "z" })).toBe("running");
+      expect(getActivityState({ state: "running", reason: "x", evidenceSource: "runtime_hook", sampledAt: "z" })).toBe("running");
     });
   });
 

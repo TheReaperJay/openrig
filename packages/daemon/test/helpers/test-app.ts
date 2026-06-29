@@ -133,7 +133,6 @@ export function createTestApp(
     tmux?: TmuxAdapter;
     adapters?: Partial<Record<string, RuntimeAdapter>>;
     activityHookToken?: string;
-    activityFreshnessMs?: number;
     /**
      * Agent Starter v1 vertical M2: optional real-fs upRouter for tests
      * that POST /api/up with a YAML spec on disk. Default behavior
@@ -256,7 +255,6 @@ export function createTestApp(
   const agentActivityStore = new AgentActivityStore({
     db,
     eventBus,
-    freshnessMs: opts?.activityFreshnessMs,
   });
 
   const podBundleSourceResolver = new PodBundleSourceResolver();

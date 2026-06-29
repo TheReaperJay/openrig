@@ -58,7 +58,6 @@ describe("AgentActivityStore", () => {
       evidenceSource: "runtime_hook",
       eventAt: "2026-04-24T11:59:00.000Z",
       rawEvent: "UserPromptSubmit",
-      stale: false,
     });
   });
 
@@ -167,9 +166,9 @@ describe("AgentActivityStore", () => {
     });
   });
 
-  it("returns unknown stale instead of green state for old hook evidence", () => {
+  it("returns the latest state regardless of age (no stale decay — a fired hook IS the state)", () => {
     const { node, sessionName } = seedSession("claude-code");
-    const store = new AgentActivityStore({ db, eventBus, now: () => NOW, freshnessMs: 60_000 });
+    const store = new AgentActivityStore({ db, eventBus, now: () => NOW });
     store.recordHookEvent({
       runtime: "claude-code",
       sessionName,
@@ -180,10 +179,9 @@ describe("AgentActivityStore", () => {
     const latest = store.getLatestForNode({ nodeId: node.id, sessionName, now: NOW });
 
     expect(latest).toMatchObject({
-      state: "unknown",
-      reason: "stale_runtime_hook",
+      state: "running",
+      reason: "user_prompt_submit",
       evidenceSource: "runtime_hook",
-      stale: true,
     });
   });
 

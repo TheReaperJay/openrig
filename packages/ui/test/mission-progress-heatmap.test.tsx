@@ -379,6 +379,17 @@ describe("MissionScopePage Progress tab composes heat-map (slice 13.5)", () => {
           status: 200,
         });
       }
+      if (url.includes("/api/scope/audit")) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            mission: { name: "RELEASE-PROOF", railStatus: "present", frontmatterError: null, findings: [] },
+            slices: [{ name: "alpha", railStatus: "present", frontmatterError: null, findings: [] }],
+            totalFindings: 0,
+          }),
+          { status: 200 },
+        );
+      }
       return new Response("[]", { status: 200 });
     });
   }

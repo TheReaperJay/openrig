@@ -97,34 +97,9 @@ describe("computeActivityRollup (FR-3)", () => {
     const rollup = { working: 3, idle: 2, needsInput: 1, needsInputHookGrade: 1, unknown: 0, total: 6 };
     expect(formatRollupLabel(rollup)).toBe("3 working · 2 idle · 1 needs you");
   });
-
-  it("pane-grade needs_input labeled activity-grade in rollup (AC-4)", () => {
-    const items = [
-      { activity: { state: "needs_input" as const, reason: "hook", evidenceSource: "runtime_hook", sampledAt: "z" }, terminalActive: null },
-      { activity: { state: "needs_input" as const, reason: "pane", evidenceSource: "pane_heuristic", sampledAt: "z" }, terminalActive: null },
-      { activity: { state: "running" as const, reason: "x", evidenceSource: "runtime_hook", sampledAt: "z" }, terminalActive: true },
-    ];
-    const rollup = computeActivityRollup(items);
-    expect(rollup.needsInput).toBe(2);
-    expect(rollup.needsInputHookGrade).toBe(1);
-    const label = formatRollupLabel(rollup);
-    expect(label).toContain("1 needs you");
-    expect(label).toContain("1 needs input (activity-grade)");
-    expect(label).not.toMatch(/2 needs you/);
-  });
 });
 
 describe("AC-4 honesty regression", () => {
-  it("pane_heuristic needs_input is NOT elevated as hook-grade", () => {
-    const result = getActivityStateWithSource(
-      { state: "needs_input", reason: "attention", evidenceSource: "pane_heuristic", sampledAt: "z" },
-      null,
-    );
-    expect(result.state).toBe("needs_input");
-    expect(result.source).not.toBe("hook");
-    expect(isHookGradeNeedsInput(result)).toBe(false);
-  });
-
   it("hook-grade needs_input requires source===hook", () => {
     const result = getActivityStateWithSource(
       { state: "needs_input", reason: "prompt", evidenceSource: "runtime_hook", sampledAt: "z" },
@@ -162,24 +137,5 @@ describe("AC-4 honesty regression", () => {
     const seqs = eventDerivedSeqsForPrune([eventCard, needsInputCard]);
     expect(seqs).toEqual([42]);
     expect(seqs).not.toContain(-1);
-  });
-
-  it("pane_heuristic needs_input is visible but activity-grade labeled", () => {
-    const result = getActivityStateWithSource(
-      { state: "needs_input", reason: "attention", evidenceSource: "pane_heuristic", sampledAt: "z" },
-      null,
-    );
-    expect(result.state).toBe("needs_input");
-    expect(result.source).toBe("pane_heuristic");
-  });
-
-  it("pane_heuristic needs_input remains visible when terminalActive=false", () => {
-    const result = getActivityStateWithSource(
-      { state: "needs_input", reason: "selection_prompt", evidenceSource: "pane_heuristic", sampledAt: "z" },
-      false,
-    );
-    expect(result.state).toBe("needs_input");
-    expect(result.source).toBe("pane_heuristic");
-    expect(isHookGradeNeedsInput(result)).toBe(false);
   });
 });

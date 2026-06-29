@@ -4,8 +4,6 @@ import type { RuntimeAdapter } from "./runtime-adapter.js";
 import type { ContextUsageStore } from "./context-usage-store.js";
 import type { AgentActivityStore } from "./agent-activity-store.js";
 import type { SeatActivityService } from "./seat-activity-service.js";
-import type { TmuxAdapter } from "../adapters/tmux.js";
-import { probeSessionActivity } from "./session-transport.js";
 import { findLatestUsableSnapshot } from "./rig-repository.js";
 import { resolveNodeWorkspace } from "./workspace/workspace-resolver.js";
 import { deriveCanonicalSessionName } from "./session-name.js";
@@ -799,7 +797,7 @@ function readPendingWorkBySession(db: Database.Database): Map<string, number> {
 
 export async function attachAgentActivity(
   entries: NodeInventoryEntry[],
-  deps: { tmuxAdapter: TmuxAdapter; activityStore?: AgentActivityStore; now?: Date },
+  deps: { activityStore?: AgentActivityStore; now?: Date },
 ): Promise<NodeInventoryEntry[]> {
   const sampledAt = deps.now ?? new Date();
   return Promise.all(entries.map(async (entry) => {
@@ -807,22 +805,10 @@ export async function attachAgentActivity(
       sessionName: entry.canonicalSessionName,
       now: sampledAt,
     });
-    if (hookActivity) {
-      return {
-        ...entry,
-        agentActivity: hookActivity,
-      };
-    }
-
-    return {
-      ...entry,
-      agentActivity: await probeSessionActivity({
-      sessionName: entry.canonicalSessionName,
-      runtime: entry.runtime,
-      attachmentType: entry.attachmentType,
-      tmuxAdapter: deps.tmuxAdapter,
-      now: sampledAt,
-    }),
-    };
+    // Hook pipeline only. No text-scanner fallback. If no hook event exists
+    // (terminal seats, cold-start agent seats), agentActivity stays undefined
+    // — the UI renders "no signal". Liveness is a separate question owned by
+    // terminalActive / SeatActivityService, not by AgentActivity.
+    return hookActivity ? { ...entry, agentActivity: hookActivity } : entry;
   }));
 }

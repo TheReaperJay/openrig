@@ -584,10 +584,10 @@ describe("RigNode", () => {
     // needs_input is the static eye-catcher (amber), idle is calm cool
     // (slate-400), unknown is desaturated (stone-300).
     const cases = [
-      { state: "running" as const, expectedLabel: "activity: running", expectedClass: "bg-emerald-500" },
-      { state: "needs_input" as const, expectedLabel: "activity: needs input", expectedClass: "bg-amber-500" },
-      { state: "idle" as const, expectedLabel: "activity: idle", expectedClass: "bg-slate-400" },
-      { state: "unknown" as const, expectedLabel: "activity: unknown", expectedClass: "bg-stone-300" },
+      { state: "running" as const, expectedLabel: "activity: running 0s", expectedClass: "bg-emerald-500" },
+      { state: "needs_input" as const, expectedLabel: "activity: needs input 0s", expectedClass: "bg-amber-500" },
+      { state: "idle" as const, expectedLabel: "activity: idle 0s", expectedClass: "bg-slate-400" },
+      { state: "unknown" as const, expectedLabel: "activity: unknown 0s", expectedClass: "bg-stone-300" },
     ];
 
     for (const { state, expectedLabel, expectedClass } of cases) {
@@ -603,7 +603,7 @@ describe("RigNode", () => {
         agentActivity: {
           state,
           reason: "test",
-          evidenceSource: "pane_heuristic" as const,
+          evidenceSource: "runtime_hook" as const,
           sampledAt: new Date().toISOString(),
           evidence: null,
         },
@@ -641,7 +641,7 @@ describe("RigNode", () => {
             status: "running",
             startupStatus: "ready" as const,
             binding: null,
-            agentActivity: { state, reason: "x", evidenceSource: "pane_heuristic" as const, sampledAt: new Date().toISOString(), evidence: null },
+            agentActivity: { state, reason: "x", evidenceSource: "runtime_hook" as const, sampledAt: new Date().toISOString(), evidence: null },
           }} />
         </ReactFlowProvider>
       );
@@ -652,25 +652,6 @@ describe("RigNode", () => {
         expect(dot.className).not.toContain("activity-pulse-running");
       }
     }
-  });
-
-  it("PL-019: stale activity (sampledAt > threshold) renders the small staleness badge next to the dot", () => {
-    const longAgo = new Date(Date.now() - 120_000).toISOString();
-    render(
-      <ReactFlowProvider>
-        <RigNode data={{
-          logicalId: "stale-node",
-          role: "worker",
-          runtime: "claude-code",
-          model: null,
-          status: "running",
-          startupStatus: "ready" as const,
-          binding: null,
-          agentActivity: { state: "running", reason: "x", evidenceSource: "pane_heuristic" as const, sampledAt: longAgo, evidence: null },
-        }} />
-      </ReactFlowProvider>
-    );
-    expect(screen.getByTestId("activity-staleness-stale-node").textContent).toBe("stale");
   });
 
   it("PL-019: when running with currentQitems, the hover hint includes 'On: <short tail> — <excerpt>'", () => {

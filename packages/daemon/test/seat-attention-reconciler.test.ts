@@ -104,15 +104,18 @@ describe("SeatAttentionReconciler", () => {
     expect(result.code).toBe("not_demonstrably_responsive");
   });
 
-  // STALE activity does NOT clear (the production-reachable trap)
-  it("does NOT clear on stale running activity (stale_runtime_hook)", async () => {
+  // Aged running activity still clears — stale decay is gone; a fired hook
+  // IS the state until another event overwrites it. (Liveness is
+  // terminalActive's job, not AgentActivity's.)
+  it("clears attention on running activity regardless of age (no stale decay)", async () => {
     const { rigId, nodeId } = seedAttentionSeat("r5", "worker@r5");
     emitActivity(rigId, nodeId, "worker@r5", "running", { stale: true });
 
     const result = await reconciler.clearAttention("worker@r5", undefined);
 
-    expect(result.ok).toBe(false);
-    expect(result.code).toBe("not_demonstrably_responsive");
+    expect(result.ok).toBe(true);
+    expect(result.clearedBy).toBe("evidence");
+    expect(result.evidence?.state).toBe("running");
   });
 
   // No activity at all does NOT clear

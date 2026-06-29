@@ -221,7 +221,7 @@ rigsRoutes.get("/:id/graph", async (c) => {
   const tmuxAdapter = c.get("tmuxAdapter" as never) as TmuxAdapter | undefined;
   const agentActivityStore = c.get("agentActivityStore" as never) as AgentActivityStore | undefined;
   const inventoryWithActivityOnly = tmuxAdapter
-    ? await attachAgentActivity(inventory, { tmuxAdapter, activityStore: agentActivityStore })
+    ? await attachAgentActivity(inventory, { activityStore: agentActivityStore })
     : inventory;
   const seatActivityService = c.get("seatActivityService" as never) as SeatActivityService | undefined;
   const inventoryWithActivity = attachTerminalActivityAndWork(inventoryWithActivityOnly, {

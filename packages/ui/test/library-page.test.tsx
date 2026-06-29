@@ -146,7 +146,7 @@ describe("Library page taxonomy", () => {
     const contextPackRow = screen.getByTestId("library-row-context-packs-context-pack:demo:1");
     expect(contextPackRow.textContent).toBe("demo-pack");
     const imageRow = screen.getByTestId("library-row-agent-images-agent-image:driver:1");
-    expect(imageRow.textContent).toBe("driver-image");
+    expect(imageRow.textContent).toBe("driver-imagev1 · ~200 tok");
     const skillLink = screen.getByTestId("library-skill-operator-skill") as HTMLAnchorElement;
     expect(skillLink).toBeDefined();
     // C-4: ID format is now source:rootName:skillName (no .openrig/skills/ prefix).

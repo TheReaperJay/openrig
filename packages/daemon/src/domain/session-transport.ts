@@ -5,274 +5,12 @@ import type { TmuxAdapter } from "../adapters/tmux.js";
 import type { AgentActivityStore } from "./agent-activity-store.js";
 import type { AgentActivity } from "./types.js";
 
-// Mid-work detection patterns (cheap heuristics)
-const MID_WORK_PATTERNS = [
-  /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, // spinner chars
-  /Working/,
-  /^[✶✢✳✻✽·]\s+\S.*(?:…|\.{3})\s+\([^)]*\bthinking\)$/m,
-  /esc to interrupt/,
-  /^[❯›]\s*\d+\.\s/m,   // trust/consent prompt choices (e.g. '› 1. Yes, continue')
-];
-
-// Idle-prompt patterns: empty prompt line (no typed text after the char).
-// Lines like '❯ Working on a task.' have text after the prompt char and
-// are NOT idle — the prompt is active with input that may look mid-work.
-const IDLE_PROMPT_PATTERNS = [
-  /^[❯›]\s*$/,  // prompt char + optional whitespace + end-of-line only
-];
-
-const PROMPT_DRAFT_PATTERNS = [
-  /^[❯›]\s+\S/,
-];
-
-// Status-bar patterns that ONLY appear when the harness is at its idle
-// prompt. These are more reliable than the prompt char alone because they
-// are never rendered during active tool execution.
-const IDLE_STATUS_BAR_PATTERNS = [
-  /gpt-\d[\d.]* .+ · Context \[/,  // Codex model/context footer
-  /⏵⏵ accept edits/,              // Claude Code edit-accept bar
-];
-
+// Foreground-process whitelist for the terminal send() guard. A tmux pane
+// whose foreground command is NOT in this set is considered busy (vim, npm
+// test, htop) and send() refuses to paste into it. This is a process-name
+// signal, NOT pane-text regex scanning. Terminals are hookless, so there is
+// no hook-pipeline alternative for this transport-safety guard.
 const IDLE_TERMINAL_COMMANDS = new Set(["zsh", "bash", "sh", "fish", "nu", "tmux"]);
-
-export interface PaneActivityClassification {
-  state: "agent_active" | "agent_idle" | "attention" | "unknown";
-  reason: string;
-  evidence: string | null;
-}
-
-function trimPaneLines(paneContent: string): string[] {
-  return paneContent
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
-function truncateEvidence(text: string): string {
-  const compact = text.replace(/\s+/g, " ").trim();
-  return compact.length > 240 ? `${compact.slice(0, 237)}...` : compact;
-}
-
-function findPatternEvidence(lines: string[], patterns: RegExp[]): string | null {
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!;
-    if (patterns.some((pattern) => pattern.test(line))) return truncateEvidence(line);
-  }
-  return null;
-}
-
-function findPromptDraftBeforeFooter(paneContent: string): string | null {
-  const rawLines = paneContent.split("\n").map((line) => line.trimEnd());
-  let lastLineIndex = rawLines.length - 1;
-  while (lastLineIndex >= 0 && rawLines[lastLineIndex]!.trim().length === 0) {
-    lastLineIndex--;
-  }
-  if (lastLineIndex <= 0) return null;
-
-  const footerLine = rawLines[lastLineIndex]!.trim();
-  const footerIsIdle = IDLE_STATUS_BAR_PATTERNS.some((pattern) => pattern.test(footerLine));
-  if (!footerIsIdle) return null;
-
-  const priorLine = rawLines[lastLineIndex - 1]!;
-  if (priorLine.trim().length === 0) return null;
-
-  const priorTrimmed = priorLine.trim();
-  const looksLikeDraft = PROMPT_DRAFT_PATTERNS.some((pattern) => pattern.test(priorTrimmed));
-  const looksLikeSelection = /^[❯›]\s*\d+\.\s/.test(priorTrimmed);
-  if (!looksLikeDraft || looksLikeSelection) return null;
-
-  return truncateEvidence(priorTrimmed);
-}
-
-export function classifyPaneActivity(paneContent: string): PaneActivityClassification {
-  const lastNonBlank = trimPaneLines(paneContent);
-  if (lastNonBlank.length === 0) {
-    return { state: "unknown", reason: "empty_capture", evidence: null };
-  }
-
-  const recentLines = lastNonBlank.slice(-8);
-  const recentWindow = recentLines.join("\n");
-  const trailingNonBlank = lastNonBlank.slice(-3);
-  const lastLine = lastNonBlank.at(-1) ?? "";
-  const idlePromptLine = trailingNonBlank.find((line) =>
-    IDLE_PROMPT_PATTERNS.some((pattern) => pattern.test(line))
-  );
-  const idleStatusBarLine = IDLE_STATUS_BAR_PATTERNS.some((pattern) => pattern.test(lastLine))
-    ? lastLine
-    : null;
-  const selectionPromptEvidence = findPatternEvidence(recentLines, [/^[❯›]\s*\d+\.\s/m]);
-  if (selectionPromptEvidence) {
-    return {
-      state: "attention",
-      reason: "selection_prompt",
-      evidence: selectionPromptEvidence,
-    };
-  }
-
-  const promptDraftEvidence = findPromptDraftBeforeFooter(paneContent);
-  if (promptDraftEvidence) {
-    return {
-      state: "attention",
-      reason: "prompt_draft",
-      evidence: promptDraftEvidence,
-    };
-  }
-
-  if (idleStatusBarLine) {
-    return {
-      state: "agent_idle",
-      reason: "idle_status_bar",
-      evidence: truncateEvidence(idleStatusBarLine),
-    };
-  }
-  if (idlePromptLine && !MID_WORK_PATTERNS.some((pattern) => pattern.test(recentWindow))) {
-    return {
-      state: "agent_idle",
-      reason: "idle_prompt",
-      evidence: truncateEvidence(idlePromptLine),
-    };
-  }
-
-  const midWorkEvidence = findPatternEvidence(recentLines, MID_WORK_PATTERNS);
-  if (midWorkEvidence) {
-    return {
-      state: "agent_active",
-      reason: "mid_work_pattern",
-      evidence: midWorkEvidence,
-    };
-  }
-
-  if (idlePromptLine) {
-    return {
-      state: "agent_idle",
-      reason: "idle_prompt",
-      evidence: truncateEvidence(idlePromptLine),
-    };
-  }
-
-  return {
-    state: "unknown",
-    reason: "no_activity_signal",
-    evidence: truncateEvidence(lastLine),
-  };
-}
-
-export async function probeSessionActivity(input: {
-  sessionName: string | null;
-  runtime: string | null;
-  attachmentType: "tmux" | "external_cli" | null | undefined;
-  tmuxAdapter: TmuxAdapter;
-  now?: Date;
-}): Promise<AgentActivity> {
-  const sampledAt = (input.now ?? new Date()).toISOString();
-
-  if (!input.sessionName) {
-    return {
-      state: "unknown",
-      reason: "no_session",
-      evidenceSource: "session_registry",
-      sampledAt,
-      evidence: null,
-    };
-  }
-  if (input.attachmentType === "external_cli") {
-    return {
-      state: "unknown",
-      reason: "unsupported_attachment",
-      evidenceSource: "external_cli",
-      sampledAt,
-      evidence: input.sessionName,
-    };
-  }
-  if (input.runtime === "terminal") {
-    try {
-      const paneCommand = await input.tmuxAdapter.getPaneCommand(input.sessionName);
-      if (paneCommand && !IDLE_TERMINAL_COMMANDS.has(paneCommand)) {
-        return {
-          state: "running",
-          reason: "foreground_command",
-          evidenceSource: "pane_heuristic",
-          sampledAt,
-          evidence: paneCommand,
-          fallback: true,
-        };
-      }
-    } catch {
-      return {
-        state: "unknown",
-        reason: "capture_failed",
-        evidenceSource: "pane_heuristic",
-        sampledAt,
-        evidence: null,
-        fallback: true,
-      };
-    }
-
-    return {
-      state: "unknown",
-      reason: "unsupported_runtime",
-      evidenceSource: "pane_heuristic",
-      sampledAt,
-      evidence: null,
-      fallback: true,
-    };
-  }
-
-  try {
-    const exists = await input.tmuxAdapter.hasSession(input.sessionName);
-    if (!exists) {
-      return {
-        state: "unknown",
-        reason: "session_missing",
-        evidenceSource: "tmux_session",
-        sampledAt,
-        evidence: input.sessionName,
-      };
-    }
-  } catch {
-    return {
-      state: "unknown",
-      reason: "tmux_unavailable",
-      evidenceSource: "tmux_session",
-      sampledAt,
-      evidence: null,
-    };
-  }
-
-  try {
-    const paneContent = await input.tmuxAdapter.capturePaneContent(input.sessionName, 20);
-    const classification = classifyPaneActivity(paneContent ?? "");
-    return {
-      state: mapPaneState(classification.state),
-      reason: classification.reason,
-      evidence: classification.evidence,
-      evidenceSource: "pane_heuristic",
-      sampledAt,
-      fallback: true,
-    };
-  } catch {
-    return {
-      state: "unknown",
-      reason: "capture_failed",
-      evidenceSource: "pane_heuristic",
-      sampledAt,
-      evidence: null,
-      fallback: true,
-    };
-  }
-}
-
-function mapPaneState(state: PaneActivityClassification["state"]): AgentActivity["state"] {
-  if (state === "agent_active") return "running";
-  if (state === "attention") return "needs_input";
-  if (state === "agent_idle") return "idle";
-  return "unknown";
-}
-
-function looksLikeMidWork(paneContent: string): boolean {
-  const activity = classifyPaneActivity(paneContent);
-  return activity.state === "agent_active" || activity.state === "attention";
-}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -662,7 +400,7 @@ export class SessionTransport {
         timeoutMs: waitForIdleMs,
       });
       waitEvidence = {
-        activity: waitResult.activity,
+        activity: waitResult.activity ?? undefined,
         waitedMs: waitResult.waitedMs,
         attempts: waitResult.attempts,
       };
@@ -678,10 +416,14 @@ export class SessionTransport {
       }
     }
 
-    // 2. Legacy mid-work check (unless force or explicit wait mode already proved idle)
+    // 2. Mid-work guard (unless force or explicit wait mode already proved idle).
+    //    Terminal seat: process-name guard (KEEP — not regex; terminals are
+    //    hookless). Agent seat: consult the hook pipeline; fresh `running`
+    //    => refuse. No hook yet (cold start) => proceed; hooks are mandatory
+    //    infrastructure, absence is transient not mid-work.
     if (!opts?.force && waitForIdleMs === undefined) {
-      try {
-        if (runtime === "terminal") {
+      if (runtime === "terminal") {
+        try {
           const paneCommand = await this.tmuxAdapter.getPaneCommand(sessionName);
           if (paneCommand && !IDLE_TERMINAL_COMMANDS.has(paneCommand)) {
             return {
@@ -691,9 +433,15 @@ export class SessionTransport {
               error: `Target pane appears mid-task. Use force: true to send anyway, or wait for the task to settle.`,
             };
           }
+        } catch {
+          // Can't check — proceed anyway
         }
-        const paneContent = await this.tmuxAdapter.capturePaneContent(sessionName, 20);
-        if (paneContent && looksLikeMidWork(paneContent)) {
+      } else {
+        const hookActivity = this.agentActivityStore?.getLatestForNode({
+          sessionName,
+          now: this.now(),
+        });
+        if (hookActivity && hookActivity.state === "running") {
           return {
             ok: false,
             sessionName,
@@ -701,8 +449,6 @@ export class SessionTransport {
             error: `Target pane appears mid-task. Use force: true to send anyway, or wait for the task to settle.`,
           };
         }
-      } catch {
-        // Can't check — proceed anyway
       }
     }
 
@@ -771,7 +517,7 @@ export class SessionTransport {
     timeoutMs: number;
   }): Promise<
     | { ok: true; activity: AgentActivity; waitedMs: number; attempts: number }
-    | { ok: false; reason: string; error: string; activity: AgentActivity; waitedMs: number; attempts: number }
+    | { ok: false; reason: string; error: string; activity: AgentActivity | null; waitedMs: number; attempts: number }
   > {
     const startedAt = Date.now();
     let attempts = 0;
@@ -781,11 +527,11 @@ export class SessionTransport {
       const activity = await this.classifySendReadiness(input);
       const waitedMs = Date.now() - startedAt;
 
-      if (activity.state === "idle") {
+      if (activity && activity.state === "idle") {
         return { ok: true, activity, waitedMs, attempts };
       }
 
-      if (activity.state === "needs_input") {
+      if (activity && activity.state === "needs_input") {
         return {
           ok: false,
           reason: "target_needs_input",
@@ -796,12 +542,12 @@ export class SessionTransport {
         };
       }
 
-      if (activity.state === "unknown") {
+      if (!activity || activity.state === "unknown") {
         return {
           ok: false,
           reason: "target_activity_unknown",
-          error: `Target activity could not be determined (${activity.reason}). No text was sent.`,
-          activity,
+          error: `Target activity could not be determined (${activity ? activity.reason : "no_hook_activity"}). No text was sent.`,
+          activity: activity ?? null,
           waitedMs,
           attempts,
         };
@@ -823,27 +569,19 @@ export class SessionTransport {
     }
   }
 
+  // Hook pipeline only. No text-scanner fallback. No synthesis — absence of
+  // a hook event is honestly `null` (not a fake `runtime_hook` unknown). The
+  // latest hook event IS the state; it does not decay (stale is deleted).
   private async classifySendReadiness(input: {
     sessionName: string;
     runtime: string | null;
     attachmentType: string | null;
-  }): Promise<AgentActivity> {
+  }): Promise<AgentActivity | null> {
     const now = this.now();
-    const hookActivity = this.agentActivityStore?.getLatestForNode({
+    return this.agentActivityStore?.getLatestForNode({
       sessionName: input.sessionName,
       now,
-    });
-    if (hookActivity && hookActivity.evidenceSource === "runtime_hook" && hookActivity.stale !== true) {
-      return hookActivity;
-    }
-
-    return probeSessionActivity({
-      sessionName: input.sessionName,
-      runtime: input.runtime,
-      attachmentType: input.attachmentType as "tmux" | "external_cli" | null | undefined,
-      tmuxAdapter: this.tmuxAdapter,
-      now,
-    });
+    }) ?? null;
   }
 
   async capture(sessionName: string, opts?: { lines?: number }): Promise<CaptureResult> {

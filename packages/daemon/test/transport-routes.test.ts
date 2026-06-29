@@ -17,6 +17,8 @@ import { externalCliAttachmentSchema } from "../src/db/migrations/019_external_c
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { SessionTransport } from "../src/domain/session-transport.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
+import { EventBus } from "../src/domain/event-bus.js";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 import { transportRoutes } from "../src/routes/transport.js";
 import { createFullTestDb } from "./helpers/test-app.js";
@@ -165,11 +167,14 @@ describe("transport routes", () => {
 
   it("POST /send with mid-work refusal returns 409", async () => {
     seedRig();
-    const tmux = {
-      ...mockTmux(),
-      capturePaneContent: async () => "Working on task...\n⠋ Processing\nesc to interrupt",
-    } as unknown as TmuxAdapter;
-    const transport = new SessionTransport({ db, rigRepo, sessionRegistry, tmuxAdapter: tmux });
+    const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
+    agentActivityStore.recordHookEvent({
+      runtime: "claude-code",
+      sessionName: "dev-impl@my-rig",
+      hookEvent: "UserPromptSubmit",
+    });
+    const transport = new SessionTransport({ db, rigRepo, sessionRegistry, tmuxAdapter: mockTmux(), agentActivityStore });
     const app = createApp({ sessionTransport: transport });
 
     const res = await app.request("/api/transport/send", {
@@ -185,23 +190,31 @@ describe("transport routes", () => {
 
   it("POST /send with waitForIdleMs waits for idle and returns activity evidence", async () => {
     seedRig();
-    let captureCount = 0;
-    const sendTextSpy = vi.fn(async () => ({ ok: true as const }));
-    const tmux = mockTmux({
-      capturePaneContent: async () => {
-        captureCount++;
-        return captureCount === 1
-          ? "Working on task...\n⠋ Processing\nesc to interrupt"
-          : "› Use /skills to list available skills\n\n  gpt-5.5 high · Context [████ ] · ~/code/projects/openrig";
-      },
-      sendText: sendTextSpy,
+    const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
+    agentActivityStore.recordHookEvent({
+      runtime: "claude-code",
+      sessionName: "dev-impl@my-rig",
+      hookEvent: "PreToolUse",
     });
+    let sleepCount = 0;
+    const sendTextSpy = vi.fn(async () => ({ ok: true as const }));
     const transport = new SessionTransport({
       db,
       rigRepo,
       sessionRegistry,
-      tmuxAdapter: tmux,
-      sleep: async () => undefined,
+      tmuxAdapter: mockTmux({ sendText: sendTextSpy }),
+      agentActivityStore,
+      sleep: async () => {
+        sleepCount++;
+        if (sleepCount === 1) {
+          agentActivityStore.recordHookEvent({
+            runtime: "claude-code",
+            sessionName: "dev-impl@my-rig",
+            hookEvent: "Stop",
+          });
+        }
+      },
       waitForIdlePollMs: 1,
     });
     const app = createApp({ sessionTransport: transport });
@@ -244,16 +257,20 @@ describe("transport routes", () => {
 
   it("POST /send maps wait timeout to 409 without sending text", async () => {
     seedRig();
-    const sendTextSpy = vi.fn(async () => ({ ok: true as const }));
-    const tmux = mockTmux({
-      capturePaneContent: async () => "Working on task...\n⠋ Processing\nesc to interrupt",
-      sendText: sendTextSpy,
+    const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
+    agentActivityStore.recordHookEvent({
+      runtime: "claude-code",
+      sessionName: "dev-impl@my-rig",
+      hookEvent: "UserPromptSubmit",
     });
+    const sendTextSpy = vi.fn(async () => ({ ok: true as const }));
     const transport = new SessionTransport({
       db,
       rigRepo,
       sessionRegistry,
-      tmuxAdapter: tmux,
+      tmuxAdapter: mockTmux({ sendText: sendTextSpy }),
+      agentActivityStore,
       waitForIdlePollMs: 1,
     });
     const app = createApp({ sessionTransport: transport });

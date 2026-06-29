@@ -346,13 +346,12 @@ describe("LiveNodeDetails (slice 25 Overview + Details)", () => {
         ...NODE_DETAIL.agentActivity,
         state: "unknown",
         reason: "no_activity_signal",
-        fallback: true,
       },
       currentQitems: [],
     });
     renderDetails();
     const stateEl = await screen.findByTestId("seat-overview-activity-state");
-    expect(stateEl.textContent).toBe("active");
+    expect(stateEl.textContent).toContain("active");
     expect(stateEl.getAttribute("data-activity-state")).toBe("active");
     expect(stateEl.className).toContain("topology-table-active-shimmer");
   });

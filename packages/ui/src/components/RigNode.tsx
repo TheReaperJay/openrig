@@ -7,7 +7,6 @@ import {
   getActivityLabel,
   getActivityBgClass,
   getActivityAnimationClass,
-  isActivityStale,
   getTimeInState,
   shortQitemTail,
 } from "../lib/activity-visuals.js";
@@ -101,7 +100,6 @@ export function RigNode({ data }: { data: RigNodeData }) {
   const activityLabel = getActivityLabel(activityState);
   const activityBgClass = getActivityBgClass(activityState);
   const activityAnimClass = getActivityAnimationClass(activityState);
-  const activityIsStale = isActivityStale(data.agentActivity);
   const timeInState = getTimeInState(data.agentActivity);
   const activityCard = getActivityCardSignal({ activityRing: data.activityRing, activityState });
   const tokenTotal = sumTokenCounts(data.contextTotalInputTokens, data.contextTotalOutputTokens);
@@ -119,7 +117,7 @@ export function RigNode({ data }: { data: RigNodeData }) {
     : [];
 
   const hoverHintLines = [
-    `Activity: ${activityLabel}${activityIsStale ? " (stale sample)" : ""}`,
+    `Activity: ${activityLabel}`,
     data.canonicalSessionName ? `Session: ${data.canonicalSessionName}` : null,
     runtimeTitle ? `Runtime: ${runtimeTitle}` : null,
     data.resolvedSpecName ? `Spec: ${data.resolvedSpecName}` : null,
@@ -193,15 +191,6 @@ export function RigNode({ data }: { data: RigNodeData }) {
           {agentName}
         </span>
         <span className="inline-flex items-center gap-1">
-          {activityIsStale && (
-            <span
-              data-testid={`activity-staleness-${data.logicalId}`}
-              className="font-mono text-[7px] uppercase tracking-[0.10em] text-stone-300"
-              title={`Activity sample is older than threshold; daemon may not be probing this seat`}
-            >
-              stale
-            </span>
-          )}
           <span
             className={`inline-flex h-2.5 w-2.5 rounded-full border border-white/50 ${activityBgClass} ${activityAnimClass} ${statusChanged ? "status-changed" : ""}`}
             data-testid={`activity-dot-${data.logicalId}`}

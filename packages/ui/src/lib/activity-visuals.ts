@@ -42,7 +42,7 @@ const ACTIVITY_TEXT_CLASSES: Record<ActivityState, string> = {
   unknown: "text-stone-400",
 };
 
-export type ActivitySource = "hook" | "terminal_activity" | "pane_heuristic" | "none";
+export type ActivitySource = "hook" | "terminal_activity" | "none";
 
 export interface ActivityStateResult {
   state: ActivityState;
@@ -60,26 +60,17 @@ export function getActivityStateWithSource(
   activity: AgentActivitySummary | null | undefined,
   terminalActive?: boolean | null,
 ): ActivityStateResult {
-  const isFreshHook = activity
-    && activity.evidenceSource === "runtime_hook"
-    && activity.state !== "unknown"
-    && !activity.stale
-    && !activity.fallback;
-
-  if (isFreshHook) {
-    return { state: activity!.state, source: "hook" };
-  }
-  if (activity?.state === "needs_input" && activity.evidenceSource === "pane_heuristic") {
-    return { state: "needs_input", source: "pane_heuristic" };
+  // Two independent signals:
+  //   1. AgentActivity (hook-derived workflow state) — authoritative for
+  //      "what is the agent doing"; does not decay (stale is deleted).
+  //   2. terminalActive (SeatActivityService output-liveness) — authoritative
+  //      for "is the pane alive".
+  // Hook state wins when it is a concrete (non-unknown) runtime_hook reading.
+  if (activity && activity.evidenceSource === "runtime_hook" && activity.state !== "unknown") {
+    return { state: activity.state, source: "hook" };
   }
   if (terminalActive === true) return { state: "running", source: "terminal_activity" };
   if (terminalActive === false) return { state: "idle", source: "terminal_activity" };
-  if (activity && activity.state !== "unknown" && activity.evidenceSource === "pane_heuristic") {
-    return { state: activity.state, source: "pane_heuristic" };
-  }
-  if (activity && activity.state !== "unknown") {
-    return { state: activity.state, source: "none" };
-  }
   return { state: "unknown", source: "none" };
 }
 
@@ -102,25 +93,6 @@ export function getActivityTextClass(state: ActivityState): string {
 export function getActivityAnimationClass(state: ActivityState): string {
   if (state === "running") return "activity-pulse-running";
   return "";
-}
-
-// Staleness badge threshold: anything beyond ~30s of staleness gets a small
-// muted indicator, since stale activity samples can mislead. Driver picks
-// the threshold; PL-019 plans for ~30s as the operator-perceptible boundary.
-const STALENESS_THRESHOLD_SECONDS = 30;
-
-export function isActivityStale(activity: AgentActivitySummary | null | undefined): boolean {
-  if (!activity) return false;
-  // staleness may not be wired by every probe path; fall back to delta from
-  // sampledAt if it is missing.
-  if (typeof activity.staleness === "number") {
-    return activity.staleness > STALENESS_THRESHOLD_SECONDS;
-  }
-  if (!activity.sampledAt) return false;
-  const sampled = Date.parse(activity.sampledAt);
-  if (Number.isNaN(sampled)) return false;
-  const ageSeconds = (Date.now() - sampled) / 1000;
-  return ageSeconds > STALENESS_THRESHOLD_SECONDS;
 }
 
 // Short ULID tail for hover hints. Full id stays available in the drawer.
@@ -186,9 +158,7 @@ export function formatRollupLabel(rollup: ActivityRollup): string {
   const parts: string[] = [];
   if (rollup.working > 0) parts.push(`${rollup.working} working`);
   if (rollup.idle > 0) parts.push(`${rollup.idle} idle`);
-  if (rollup.needsInputHookGrade > 0) parts.push(`${rollup.needsInputHookGrade} needs you`);
-  const paneNeedsInput = rollup.needsInput - rollup.needsInputHookGrade;
-  if (paneNeedsInput > 0) parts.push(`${paneNeedsInput} needs input (activity-grade)`);
+  if (rollup.needsInput > 0) parts.push(`${rollup.needsInput} needs you`);
   if (rollup.unknown > 0) parts.push(`${rollup.unknown} unknown`);
   return parts.join(" · ") || "no seats";
 }

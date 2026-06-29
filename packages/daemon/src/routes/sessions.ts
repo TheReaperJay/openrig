@@ -96,7 +96,6 @@ nodesRoutes.get("/", async (c) => {
   // contract is preserved at the data layer; this route is purely
   // assembling the JSON response.
   const withActivity = await attachAgentActivity(inventory, {
-    tmuxAdapter: deps.tmuxAdapter,
     activityStore: deps.agentActivityStore,
   });
   const withTerminalAndWork = attachTerminalActivityAndWork(withActivity, {
@@ -118,7 +117,7 @@ nodesRoutes.get("/:logicalId", async (c) => {
     ? getNodeDetailWithContext(deps.rigRepo.db, rigId, logicalId, contextUsageStore)
     : getNodeDetail(deps.rigRepo.db, rigId, logicalId);
   if (!detail) return c.json({ error: `Node "${logicalId}" not found in rig "${rigId}". Check node IDs with: rig ps --nodes` }, 404);
-  const [detailWithActivity] = await attachAgentActivity([detail], { tmuxAdapter: deps.tmuxAdapter, activityStore: deps.agentActivityStore });
+  const [detailWithActivity] = await attachAgentActivity([detail], { activityStore: deps.agentActivityStore });
   const [detailWithTerminalAndWork] = attachTerminalActivityAndWork(detailWithActivity ? [detailWithActivity] : [detail], {
     db: deps.rigRepo.db,
     seatActivity: deps.seatActivityService,

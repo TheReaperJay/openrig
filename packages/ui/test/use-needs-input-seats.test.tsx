@@ -40,9 +40,8 @@ describe("useNeedsInputSeats", () => {
             agentActivity: {
               state: "needs_input",
               reason: "selection_prompt",
-              evidenceSource: "pane_heuristic",
+              evidenceSource: "runtime_hook",
               sampledAt: "2026-06-19T09:35:29.847Z",
-              fallback: true,
             },
           },
         ]));
@@ -57,7 +56,7 @@ describe("useNeedsInputSeats", () => {
     expect(result.current.data![0]).toMatchObject({
       logicalId: "orch1.lead",
       sessionName: "orch1-lead@product-team",
-      source: "pane_heuristic",
+      source: "hook",
       rigId: "product-team",
     });
   });

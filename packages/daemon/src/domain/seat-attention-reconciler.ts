@@ -117,7 +117,7 @@ export class SeatAttentionReconciler {
       sessionName,
     });
 
-    if (activity && activity.stale !== true && POSITIVE_STATES.has(activity.state)) {
+    if (activity && POSITIVE_STATES.has(activity.state)) {
       const evidence = { kind: "fresh_activity", state: activity.state, reason: activity.reason };
       return this.performEvidenceClear(session, sessionName, startupClassActive, derivedOutcome, evidence, previousError);
     }
@@ -148,7 +148,7 @@ export class SeatAttentionReconciler {
       ok: false,
       code: "not_demonstrably_responsive",
       detail: activity
-        ? `Latest activity: state='${activity.state}', stale=${activity.stale ?? false}, reason='${activity.reason}' -- not positive evidence; send-verify also not confirmed`
+        ? `Latest activity: state='${activity.state}', reason='${activity.reason}' -- not positive evidence; send-verify also not confirmed`
         : "No recent agent activity found; send-verify also not confirmed",
     };
   }

@@ -2,8 +2,6 @@ import type Database from "better-sqlite3";
 import type { EventBus } from "./event-bus.js";
 import type { AgentActivity, PersistedEvent } from "./types.js";
 
-const DEFAULT_FRESHNESS_MS = 5 * 60 * 1000;
-
 export interface HookActivityInput {
   runtime: string | null;
   sessionName?: string | null;
@@ -21,7 +19,6 @@ interface AgentActivityStoreDeps {
   db: Database.Database;
   eventBus: EventBus;
   now?: () => Date;
-  freshnessMs?: number;
 }
 
 interface SessionLookupRow {
@@ -39,13 +36,11 @@ export class AgentActivityStore {
   readonly db: Database.Database;
   private readonly eventBus: EventBus;
   private readonly now: () => Date;
-  private readonly freshnessMs: number;
 
   constructor(deps: AgentActivityStoreDeps) {
     this.db = deps.db;
     this.eventBus = deps.eventBus;
     this.now = deps.now ?? (() => new Date());
-    this.freshnessMs = deps.freshnessMs ?? DEFAULT_FRESHNESS_MS;
   }
 
   recordHookEvent(input: HookActivityInput): RecordHookActivityResult {
@@ -107,25 +102,15 @@ export class AgentActivityStore {
     const activity = payload.activity;
     if (input.sessionName && payload.sessionName !== input.sessionName) return null;
 
+    // The latest hook event IS the state. It does not decay — a fired hook
+    // remains authoritative until another event overwrites it. Liveness ("is
+    // the pane alive?") is a separate question owned by terminalActive /
+    // SeatActivityService, not by AgentActivity. (The stale/freshness concept
+    // was deleted: it wrongly aged valid states like idle into unknown.)
     const referenceTime = input.now ?? this.now();
-    const eventTime = activity.eventAt ? Date.parse(activity.eventAt) : NaN;
-    if (Number.isFinite(eventTime) && referenceTime.getTime() - eventTime > this.freshnessMs) {
-      return {
-        ...activity,
-        state: "unknown",
-        reason: "stale_runtime_hook",
-        evidenceSource: "runtime_hook",
-        sampledAt: referenceTime.toISOString(),
-        fallback: false,
-        stale: true,
-      };
-    }
-
     return {
       ...activity,
       sampledAt: referenceTime.toISOString(),
-      fallback: false,
-      stale: false,
     };
   }
 
@@ -210,8 +195,6 @@ function normalizeHookActivity(input: {
     rawEvent,
     rawSubtype,
     runtime,
-    fallback: false,
-    stale: false,
   };
 }
 

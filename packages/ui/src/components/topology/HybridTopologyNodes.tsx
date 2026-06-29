@@ -6,7 +6,6 @@ import {
   getActivityBgClass,
   getActivityLabel,
   getActivityStateWithSource,
-  isActivityStale,
   getTimeInState,
 } from "../../lib/activity-visuals.js";
 import type { AgentActivitySummary } from "../../hooks/useNodeInventory.js";
@@ -117,7 +116,6 @@ function HybridAgentNodeInner({ data }: { data: HybridAgentNodeData }) {
   const activityLabel = getActivityLabel(activityState);
   const activityBgClass = getActivityBgClass(activityState);
   const activityAnimClass = getActivityAnimationClass(activityState);
-  const activityStale = isActivityStale(data.agentActivity);
   const timeInState = getTimeInState(data.agentActivity);
   const activityCard = getActivityCardSignal({ activityRing: data.activityRing, activityState });
   const runtimeTitle = data.runtime || data.model ? formatRuntimeModel(data.runtime, data.model) : null;
@@ -132,7 +130,7 @@ function HybridAgentNodeInner({ data }: { data: HybridAgentNodeData }) {
       data-testid="hybrid-agent-node"
       title={[
         data.canonicalSessionName,
-        `activity: ${activityLabel}${activityStale ? " (stale)" : ""}`,
+        `activity: ${activityLabel}`,
         runtimeTitle,
         tokenTitle,
       ].filter(Boolean).join("\n")}

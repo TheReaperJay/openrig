@@ -372,12 +372,7 @@ export type OccupantLifecycle = "active" | "retiring" | "retired" | "context_wal
 export type ContinuityOutcome = "resumed" | "rebuilt" | "forked" | "fresh" | "failed";
 export type HandoverResult = "complete" | "unchanged" | "partial" | "failed" | null;
 export type AgentActivityState = "running" | "needs_input" | "idle" | "unknown";
-export type AgentActivityEvidenceSource =
-  | "runtime_hook"
-  | "pane_heuristic"
-  | "tmux_session"
-  | "external_cli"
-  | "session_registry";
+export type AgentActivityEvidenceSource = "runtime_hook";
 
 export interface AgentActivity {
   state: AgentActivityState;
@@ -389,8 +384,6 @@ export interface AgentActivity {
   rawEvent?: string | null;
   rawSubtype?: string | null;
   runtime?: string | null;
-  fallback?: boolean;
-  stale?: boolean;
 }
 
 export interface NodeRecoveryGuidance {
