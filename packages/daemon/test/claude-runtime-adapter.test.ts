@@ -19,16 +19,22 @@ function mockTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function mockFs(files?: Record<string, string>): ClaudeAdapterFsOps {
+function mockFs(files?: Record<string, string>, homedir = "/mock-home"): ClaudeAdapterFsOps {
   const store: Record<string, string> = { ...files };
+  // Pre-seed vendored telemetry plugin so mandatory projection doesn't fail
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/hooks/claude.json`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "{}";
+  }
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     copyFile: () => {},
     listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   } as ClaudeAdapterFsOps & { _store: Record<string, string> };
 }
 
@@ -273,7 +279,7 @@ describe("Claude Code runtime adapter", () => {
 
     const result = await adapter.project(plan, makeBinding());
 
-    expect(result).toEqual({ projected: ["claude-settings"], skipped: [], failed: [] });
+    expect(result).toEqual({ projected: ["openrig-core [mandatory telemetry]", "claude-settings"], skipped: [], failed: [] });
     const store = (fs as unknown as { _store: Record<string, string> })._store;
     const settings = JSON.parse(store["/project/.claude/settings.local.json"]!);
     expect(settings.customSetting).toBe(true);
@@ -312,7 +318,7 @@ describe("Claude Code runtime adapter", () => {
 
     const result = await adapter.project(plan, makeBinding());
 
-    expect(result).toEqual({ projected: ["claude-mcp"], skipped: [], failed: [] });
+    expect(result).toEqual({ projected: ["openrig-core [mandatory telemetry]", "claude-mcp"], skipped: [], failed: [] });
     const store = (fs as unknown as { _store: Record<string, string> })._store;
     const mcp = JSON.parse(store["/project/.mcp.json"]!);
     expect(Object.keys(mcp.mcpServers)).toEqual(["existing", "context7"]);
@@ -337,7 +343,7 @@ describe("Claude Code runtime adapter", () => {
 
     const result = await adapter.project(plan, makeBinding());
 
-    expect(result.projected).toEqual([]);
+    expect(result.projected).toEqual(["openrig-core [mandatory telemetry]"]);
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0]!.effectiveId).toBe("claude-settings");
     expect(result.failed[0]!.error).toContain("must be a JSON object");
@@ -358,7 +364,7 @@ describe("Claude Code runtime adapter", () => {
     const sendText = tmux.sendText as ReturnType<typeof vi.fn>;
     expect(sendText).toHaveBeenCalledWith(
       "r01-impl",
-      "claude --permission-mode acceptEdits --session-id 11111111-1111-4111-8111-111111111111 --name dev-impl@test-rig"
+      "claude --permission-mode acceptEdits --session-id 11111111-1111-4111-8111-111111111111 --name dev-impl@test-rig --plugin-dir /mock-home/.openrig/plugins/openrig-core"
     );
     if (result.ok) {
       expect(result.resumeToken).toBe("11111111-1111-4111-8111-111111111111");
@@ -376,7 +382,7 @@ describe("Claude Code runtime adapter", () => {
     const sendText = tmux.sendText as ReturnType<typeof vi.fn>;
     expect(sendText).toHaveBeenCalledWith(
       "r01-impl",
-      "claude --permission-mode acceptEdits --resume abc-123 --name dev-impl@test-rig"
+      "claude --permission-mode acceptEdits --resume abc-123 --name dev-impl@test-rig --plugin-dir /mock-home/.openrig/plugins/openrig-core"
     );
   });
 

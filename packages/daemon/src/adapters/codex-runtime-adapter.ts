@@ -20,6 +20,13 @@ import {
 import { assessNativeResumeProbe, buildCodexResumeCore, type NativeResumeProbeResult } from "../domain/native-resume-probe.js";
 import { mergeManagedBlock } from "../domain/managed-blocks.js";
 import { shellQuote } from "./shell-quote.js";
+import {
+  TELEMETRY_PLUGIN_ID,
+  vendoredTelemetryPluginPath,
+  telemetryProjectionTarget,
+  copyPluginTree,
+} from "../domain/telemetry-plugin.js";
+import { ensureCodexGlobalHooks } from "../domain/codex-global-hooks.js";
 
 export interface CodexAdapterFsOps {
   readFile(path: string): string;
@@ -101,6 +108,24 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     const projected: string[] = [];
     const skipped: string[] = [];
     const failed: Array<{ effectiveId: string; error: string }> = [];
+
+    // ---- MANDATORY TELEMETRY PLUGIN PROJECTION ----
+    // Same as Claude: unconditional on runtime == "codex".
+    // The per-cwd .codex/plugins/openrig-core/ directory is decorative —
+    // Codex reads ~/.codex/hooks.json (user-global) — but writing it
+    // keeps the file layout consistent for diagnostics.
+    try {
+      const sourceDir = vendoredTelemetryPluginPath(this.fs.homedir ?? os.homedir());
+      const targetDir = telemetryProjectionTarget("codex", binding.cwd);
+      if (!this.fs.exists(sourceDir)) {
+        throw new Error(`vendored telemetry plugin missing at ${sourceDir}`);
+      }
+      this.fs.mkdirp(targetDir);
+      copyPluginTree(this.fs, sourceDir, targetDir);
+      projected.push(`${TELEMETRY_PLUGIN_ID} [mandatory telemetry]`);
+    } catch (err) {
+      failed.push({ effectiveId: `${TELEMETRY_PLUGIN_ID} [mandatory telemetry]`, error: (err as Error).message });
+    }
 
     for (const entry of plan.entries) {
       if (entry.classification === "no_op") {
@@ -671,6 +696,11 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       [this.resolveHomeDirByPid(pid), this.fs.homedir, os.homedir()],
       (path) => this.fs.exists(path)
     );
+  }
+
+  /** Idempotent provisioning of ~/.codex/hooks.json and trust entries. */
+  ensureGlobalCodexHooks(home: string, relayCommand: string): void {
+    ensureCodexGlobalHooks(this.fs, home, relayCommand);
   }
 }
 

@@ -38,15 +38,20 @@ function mockTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function mockCodexFs(seed: Record<string, string>): CodexAdapterFsOps & { _store: Record<string, string> } {
+function mockCodexFs(seed: Record<string, string>, homedir = "/mock-home"): CodexAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...seed };
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/hooks/codex.json`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "{}";
+  }
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   };
 }
 

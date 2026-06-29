@@ -17,8 +17,12 @@ function mockTmux() {
   } as unknown as ConstructorParameters<typeof PiCodingAgentAdapter>[0]["tmux"];
 }
 
-function mockPiFs(files?: Record<string, string>): PiAdapterFsOps & { _store: Record<string, string> } {
+function mockPiFs(files?: Record<string, string>, homedir = "/mock-home"): PiAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...files };
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/pi/index.ts`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "export default {}";
+  }
   return {
     readFile: (p: string) => {
       if (p in store) return store[p]!;
@@ -27,13 +31,14 @@ function mockPiFs(files?: Record<string, string>): PiAdapterFsOps & { _store: Re
     writeFile: (p: string, c: string) => {
       store[p] = c;
     },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     listFiles: (dir: string) =>
       Object.keys(store)
         .filter((k) => k.startsWith(dir + "/"))
         .map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   } as PiAdapterFsOps & { _store: Record<string, string> };
 }
 

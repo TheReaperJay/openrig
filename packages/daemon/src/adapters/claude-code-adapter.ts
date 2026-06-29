@@ -1,5 +1,6 @@
 import nodePath from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import type { TmuxAdapter } from "./tmux.js";
 import type {
@@ -11,6 +12,12 @@ import { resolveConcreteHint } from "../domain/runtime-adapter.js";
 import type { ProjectionPlan, ProjectionEntry } from "../domain/projection-planner.js";
 import { assessNativeResumeProbe } from "../domain/native-resume-probe.js";
 import { mergeManagedBlock } from "../domain/managed-blocks.js";
+import {
+  TELEMETRY_PLUGIN_ID,
+  vendoredTelemetryPluginPath,
+  telemetryProjectionTarget,
+  copyPluginTree,
+} from "../domain/telemetry-plugin.js";
 
 export interface ClaudeAdapterFsOps {
   readFile(path: string): string;
@@ -81,6 +88,24 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     const projected: string[] = [];
     const skipped: string[] = [];
     const failed: Array<{ effectiveId: string; error: string }> = [];
+
+    // ---- MANDATORY TELEMETRY PLUGIN PROJECTION ----
+    // Every Claude-managed seat ships with the openrig-core telemetry plugin.
+    // This is unconditional on runtime == "claude-code". It is NOT driven by
+    // selectedResources, profile YAML, or any user configuration.
+    // Equivalent to npm install: it's there because the program needs it.
+    try {
+      const sourceDir = vendoredTelemetryPluginPath(this.fs.homedir ?? os.homedir());
+      const targetDir = telemetryProjectionTarget("claude-code", binding.cwd);
+      if (!this.fs.exists(sourceDir)) {
+        throw new Error(`vendored telemetry plugin missing at ${sourceDir} — PluginVendorService must run before launchHarness`);
+      }
+      this.fs.mkdirp(targetDir);
+      copyPluginTree(this.fs, sourceDir, targetDir);
+      projected.push(`${TELEMETRY_PLUGIN_ID} [mandatory telemetry]`);
+    } catch (err) {
+      failed.push({ effectiveId: `${TELEMETRY_PLUGIN_ID} [mandatory telemetry]`, error: (err as Error).message });
+    }
 
     for (const entry of plan.entries) {
       if (entry.classification === "no_op") {
@@ -170,6 +195,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     }
 
     const permissionMode = "--permission-mode acceptEdits";
+    const pluginDir = vendoredTelemetryPluginPath(this.fs.homedir ?? os.homedir());
+    const pluginDirFlag = ` --plugin-dir ${pluginDir}`;
 
     // Fork branch: build `claude --resume <parent> --fork-session --name <seat>`
     // and capture the NEW post-fork session id. The parent token is NEVER
@@ -185,7 +212,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       if (!parentId) {
         return { ok: false, error: "claude-code fork: forkSource.value is required (parent native_id)" };
       }
-      const cmd = `claude ${permissionMode} --resume ${parentId} --fork-session --name ${opts.name}`;
+      const cmd = `claude ${permissionMode} --resume ${parentId} --fork-session --name ${opts.name}${pluginDirFlag}`;
       const textResult = await this.tmux.sendText(binding.tmuxSession, cmd);
       if (!textResult.ok) {
         return { ok: false, error: `Failed to send launch command: ${textResult.message}` };
@@ -211,8 +238,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
     const generatedSessionId = opts.resumeToken ? null : this.sessionIdFactory();
     const cmd = opts.resumeToken
-      ? `claude ${permissionMode} --resume ${opts.resumeToken} --name ${opts.name}`
-      : `claude ${permissionMode} --session-id ${generatedSessionId} --name ${opts.name}`;
+      ? `claude ${permissionMode} --resume ${opts.resumeToken} --name ${opts.name}${pluginDirFlag}`
+      : `claude ${permissionMode} --session-id ${generatedSessionId} --name ${opts.name}${pluginDirFlag}`;
 
     const textResult = await this.tmux.sendText(binding.tmuxSession, cmd);
     if (!textResult.ok) {

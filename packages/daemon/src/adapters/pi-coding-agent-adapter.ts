@@ -1,5 +1,6 @@
 import nodePath from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import os from "node:os";
 import type { TmuxAdapter } from "./tmux.js";
 import type {
   RuntimeAdapter,
@@ -15,6 +16,12 @@ import { resolveConcreteHint } from "../domain/runtime-adapter.js";
 import type { ProjectionPlan, ProjectionEntry } from "../domain/projection-planner.js";
 import { mergeManagedBlock } from "../domain/managed-blocks.js";
 import { shellQuote } from "./shell-quote.js";
+import {
+  TELEMETRY_PLUGIN_ID,
+  vendoredTelemetryPluginPath,
+  telemetryProjectionTarget,
+  copyPluginTree,
+} from "../domain/telemetry-plugin.js";
 
 export interface PiAdapterFsOps {
   readFile(path: string): string;
@@ -73,7 +80,30 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
     const skipped: string[] = [];
     const failed: Array<{ effectiveId: string; error: string }> = [];
 
-    for (const entry of plan.entries) {
+    // ---- MANDATORY TELEMETRY PLUGIN PROJECTION ----
+  // Pi auto-discovers .pi/extensions/<id>/index.ts, so the projection
+  // is the entire load mechanism. Unconditional on runtime == "pi-coding-agent".
+  try {
+    const sourceDir = vendoredTelemetryPluginPath(this.fs.homedir ?? os.homedir());
+    const targetDir = telemetryProjectionTarget("pi-coding-agent", binding.cwd);
+    if (!this.fs.exists(sourceDir)) {
+      throw new Error(`vendored telemetry plugin missing at ${sourceDir}`);
+    }
+    this.fs.mkdirp(targetDir);
+    // Pi: project only the pi/ subdir of the vendored tree (matches
+    // the prior shape). The relay + extension entry live there.
+    const piSourceDir = nodePath.join(sourceDir, "pi");
+    if (this.fs.listFiles && this.fs.listFiles(piSourceDir).length > 0) {
+      copyPluginTree(this.fs, piSourceDir, targetDir);
+    } else {
+      copyPluginTree(this.fs, sourceDir, targetDir);
+    }
+    projected.push(`${TELEMETRY_PLUGIN_ID} [mandatory telemetry]`);
+  } catch (err) {
+    failed.push({ effectiveId: `${TELEMETRY_PLUGIN_ID} [mandatory telemetry]`, error: (err as Error).message });
+  }
+
+  for (const entry of plan.entries) {
       if (entry.classification === "no_op") {
         skipped.push(entry.effectiveId);
         continue;

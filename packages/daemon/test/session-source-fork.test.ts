@@ -284,7 +284,7 @@ describe("ClaudeCodeAdapter.launchHarness fork branch", () => {
     const sendText = tmux.sendText as ReturnType<typeof vi.fn>;
     expect(sendText).toHaveBeenCalledWith(
       "r01-impl",
-      "claude --permission-mode acceptEdits --resume PARENT-TOKEN-ABC --fork-session --name dev-impl@test-rig",
+      "claude --permission-mode acceptEdits --resume PARENT-TOKEN-ABC --fork-session --name dev-impl@test-rig --plugin-dir /mock-home/.openrig/plugins/openrig-core",
     );
     if (result.ok) {
       // Captured token MUST be the new post-fork token, NOT the parent.

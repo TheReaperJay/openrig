@@ -25,15 +25,20 @@ function mockTmux(overrides?: Partial<TmuxAdapter>): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function mockFs(files?: Record<string, string>): CodexAdapterFsOps {
+function mockFs(files?: Record<string, string>, homedir = os.homedir()): CodexAdapterFsOps {
   const store: Record<string, string> = { ...files };
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/hooks/codex.json`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "{}";
+  }
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   } as CodexAdapterFsOps & { _store: Record<string, string> };
 }
 
@@ -1037,7 +1042,9 @@ describe("Codex runtime adapter", () => {
   // verification" above) — only UNRESOLVED gates fail loudly.
 
   it("deliverStartup pre-seeds Codex trust for the managed project", async () => {
-    const fs = mockFs({});
+    const fs = mockFs({
+      "/home/tester/.openrig/plugins/openrig-core/hooks/codex.json": "{}",
+    }, "/home/tester");
     const fsWithHome = { ...fs, homedir: "/home/tester" };
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome });
 
@@ -1053,7 +1060,8 @@ describe("Codex runtime adapter", () => {
   it("deliverStartup does not inject Codex MCP servers without runtime resources", async () => {
     const fs = mockFs({
       "/home/tester/.codex/config.toml": '[projects."/tmp/workspace"]\ntrust_level = "trusted"\n',
-    });
+      "/home/tester/.openrig/plugins/openrig-core/hooks/codex.json": "{}",
+    }, "/home/tester");
     const fsWithHome = { ...fs, homedir: "/home/tester" };
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome });
 
@@ -1078,7 +1086,8 @@ describe("Codex runtime adapter", () => {
         "",
       ].join("\n"),
       "/home/tester/.codex/config.toml": '[projects."/tmp/workspace"]\ntrust_level = "trusted"\n',
-    });
+      "/home/tester/.openrig/plugins/openrig-core/hooks/codex.json": "{}",
+    }, "/home/tester");
     const fsWithHome = { ...fs, homedir: "/home/tester" };
     const adapter = new CodexRuntimeAdapter({ tmux: mockTmux(), fsOps: fsWithHome });
     const plan: ProjectionPlan = {
@@ -1096,8 +1105,8 @@ describe("Codex runtime adapter", () => {
     const first = await adapter.project(plan, makeBinding("/tmp/workspace"));
     const second = await adapter.project(plan, makeBinding("/tmp/workspace"));
 
-    expect(first).toEqual({ projected: ["codex-default-config"], skipped: [], failed: [] });
-    expect(second).toEqual({ projected: ["codex-default-config"], skipped: [], failed: [] });
+    expect(first).toEqual({ projected: ["openrig-core [mandatory telemetry]", "codex-default-config"], skipped: [], failed: [] });
+    expect(second).toEqual({ projected: ["openrig-core [mandatory telemetry]", "codex-default-config"], skipped: [], failed: [] });
     const store = (fsWithHome as unknown as { _store: Record<string, string> })._store;
     const content = store["/home/tester/.codex/config.toml"];
     expect(content).toContain('[projects."/tmp/workspace"]');

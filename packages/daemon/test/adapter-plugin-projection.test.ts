@@ -35,28 +35,38 @@ function mockTmux() {
   } as unknown as ConstructorParameters<typeof ClaudeCodeAdapter>[0]["tmux"];
 }
 
-function mockClaudeFs(files?: Record<string, string>): ClaudeAdapterFsOps & { _store: Record<string, string> } {
+function mockClaudeFs(files?: Record<string, string>, homedir = "/mock-home"): ClaudeAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...files };
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/hooks/claude.json`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "{}";
+  }
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     copyFile: () => {},
     listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   } as ClaudeAdapterFsOps & { _store: Record<string, string> };
 }
 
-function mockCodexFs(files?: Record<string, string>): CodexAdapterFsOps & { _store: Record<string, string> } {
+function mockCodexFs(files?: Record<string, string>, homedir = "/mock-home"): CodexAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...files };
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/hooks/codex.json`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "{}";
+  }
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   } as CodexAdapterFsOps & { _store: Record<string, string> };
 }
 
@@ -175,6 +185,7 @@ describe("Claude Code adapter — plugin directory projection", () => {
     const fs = mockClaudeFs({
       "/p/openrig-core/.claude-plugin/plugin.json": "{}",
       "/cwd/.claude/plugins/openrig-core/.claude-plugin/plugin.json": "{}", // already projected with same content
+      "/cwd/.claude/plugins/openrig-core/hooks/claude.json": "{}", // telemetry already projected
     });
     const adapter = new ClaudeCodeAdapter({ tmux: mockTmux(), fsOps: fs });
     const plan = makePlan([makePluginEntry("openrig-core", "/p/openrig-core")]);

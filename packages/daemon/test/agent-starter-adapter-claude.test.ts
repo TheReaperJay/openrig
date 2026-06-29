@@ -46,16 +46,21 @@ function mockTmux(): TmuxAdapter {
 // absolute path) so the real ClaudeCodeAdapter can read it via its fs
 // seam; writes to <cwd>/CLAUDE.md land in the same store and we read
 // them back to verify the merged-guidance result.
-function mockClaudeFs(seed: Record<string, string>): ClaudeAdapterFsOps & { _store: Record<string, string> } {
+function mockClaudeFs(seed: Record<string, string>, homedir = "/mock-home"): ClaudeAdapterFsOps & { _store: Record<string, string> } {
   const store: Record<string, string> = { ...seed };
+  const vendoredPlugin = `${homedir}/.openrig/plugins/openrig-core/hooks/claude.json`;
+  if (!(vendoredPlugin in store)) {
+    store[vendoredPlugin] = "{}";
+  }
   return {
     readFile: (p: string) => { if (p in store) return store[p]!; throw new Error(`Not found: ${p}`); },
     writeFile: (p: string, c: string) => { store[p] = c; },
-    exists: (p: string) => p in store,
+    exists: (p: string) => p in store || Object.keys(store).some((k) => k === p || k.startsWith(p + "/")),
     mkdirp: () => {},
     copyFile: () => {},
     listFiles: (dir: string) => Object.keys(store).filter((k) => k.startsWith(dir + "/")).map((k) => k.slice(dir.length + 1)),
     _store: store,
+    homedir,
   };
 }
 

@@ -433,6 +433,72 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const claudeAdapter = new ClaudeCodeAdapter({ tmux: tmuxAdapter, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), copyFile: (src: string, dest: string) => fs.copyFileSync(src, dest), listFiles: (dir: string) => { const r: string[] = []; function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, readdir: (dir: string) => fs.readdirSync(dir), homedir: os.homedir() }, stateDir: OPENRIG_HOME, collectorAssetPath: nodePath.resolve(import.meta.dirname, "../assets/claude-statusline-context.cjs"), autoDriveProviderPrompts: runtimeSettings.recoveryAutoDriveProviderPrompts });
   const codexAdapter = new CodexRuntimeAdapter({ tmux: tmuxAdapter, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, homedir: os.homedir() } });
 
+  // Plugin vendor setup — BLOCKING, fail-closed.
+  // Telemetry is infrastructure: if the plugin can't be vendored, the
+  // daemon cannot start. No try/catch.
+  const { PluginVendorService } = await import("./domain/plugin-vendor-service.js");
+  const vendoredAssetsDir = nodePath.resolve(import.meta.dirname, "../assets/plugins");
+  const userPluginsDir = getDefaultOpenRigPath("plugins");
+  const realFs = {
+    readFile: (p: string) => fs.readFileSync(p, "utf-8"),
+    writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"),
+    exists: (p: string) => fs.existsSync(p),
+    mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }),
+    listFiles: (dir: string) => {
+      const r: string[] = [];
+      function w(d: string, pre: string) {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name));
+          else r.push(pre ? nodePath.join(pre, e.name) : e.name);
+        }
+      }
+      w(dir, "");
+      return r;
+    },
+  };
+  const httpClient = async (url: string, opts?: { timeoutMs?: number }) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? 5000);
+    try {
+      const resp = await fetch(url, { signal: ctrl.signal });
+      return { ok: resp.ok, status: resp.status };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const vendorService = new PluginVendorService({
+    vendoredAssetsDir,
+    userPluginsDir,
+    fs: realFs,
+    httpClient,
+    logger: (...args) => console.log("[openrig]", ...args),
+  });
+  await vendorService.ensureLatest("openrig-core");
+
+  const expectedHookScript = nodePath.join(
+    userPluginsDir, "openrig-core", "hooks", "scripts", "activity-relay.cjs"
+  );
+  if (!fs.existsSync(expectedHookScript)) {
+    throw new Error(`telemetry plugin vendor incomplete: missing ${expectedHookScript}`);
+  }
+
+  // Codex global hooks provisioning — idempotent, writes BOTH:
+  //   1. ~/.codex/hooks.json with our three hook entries (SessionStart /
+  //      UserPromptSubmit / Stop), merged with user-authored entries.
+  //   2. ~/.codex/config.toml [state."..."] entries with our three trust
+  //      hashes so our hooks pass Codex's per-hook trust gate at startup.
+  const codexHome = os.homedir();
+  const codexRelayCommand = `node ${nodePath.join(
+    userPluginsDir, "openrig-core", "hooks", "scripts", "activity-relay.cjs"
+  )}`;
+  const codexGlobalHooksFs = {
+    readFile: (p: string) => fs.readFileSync(p, "utf-8"),
+    writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"),
+    exists: (p: string) => fs.existsSync(p),
+    mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }),
+  };
+  codexAdapter.ensureGlobalCodexHooks(codexHome, codexRelayCommand);
+
   // plugin-primitive Phase 3a slice 3.5 — ensure Codex feature flag
   // codex_hooks = true is set in ~/.codex/config.toml so plugin-shipped
   // hooks fire on Codex runtime. Slice 27 also creates the default
@@ -462,54 +528,6 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     codexAdapter.ensureCodexFeatureFlag(enabled, { codexVersion });
   } catch (err) {
     console.error(`[openrig] runtime setup warning: ${(err as Error).message}`);
-  }
-
-  // plugin-primitive Phase 3a slice 3.2 — vendor openrig-core plugin to
-  // ~/.openrig/plugins/openrig-core/ on first launch. Auto-fetch from
-  // github.com/mvschwarz/openrig-plugins is best-effort + 404-tolerant
-  // (repo currently empty as of 2026-05-10; vendored
-  // copy is the source of truth at v0).
-  try {
-    const { PluginVendorService } = await import("./domain/plugin-vendor-service.js");
-    const vendoredAssetsDir = nodePath.resolve(import.meta.dirname, "../assets/plugins");
-    const userPluginsDir = getDefaultOpenRigPath("plugins");
-    const realFs = {
-      readFile: (p: string) => fs.readFileSync(p, "utf-8"),
-      writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"),
-      exists: (p: string) => fs.existsSync(p),
-      mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }),
-      listFiles: (dir: string) => {
-        const r: string[] = [];
-        function w(d: string, pre: string) {
-          for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-            if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name));
-            else r.push(pre ? nodePath.join(pre, e.name) : e.name);
-          }
-        }
-        w(dir, "");
-        return r;
-      },
-    };
-    const httpClient = async (url: string, opts?: { timeoutMs?: number }) => {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? 5000);
-      try {
-        const resp = await fetch(url, { signal: ctrl.signal });
-        return { ok: resp.ok, status: resp.status };
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-    const vendorService = new PluginVendorService({
-      vendoredAssetsDir,
-      userPluginsDir,
-      fs: realFs,
-      httpClient,
-      logger: (...args) => console.log("[openrig]", ...args),
-    });
-    await vendorService.ensureLatest("openrig-core");
-  } catch (err) {
-    console.error(`[openrig] plugin vendor setup warning: ${(err as Error).message}`);
   }
 
   // PL-014 Item 6: hoist ContextPackLibraryService construction so the
