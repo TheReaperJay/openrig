@@ -198,6 +198,7 @@ interface DaemonResult {
   deps: AppDeps;
   contextMonitor: import("./domain/context-monitor.js").ContextMonitor;
   startupStatusSelfHealer: import("./domain/startup-status-self-healer.js").StartupStatusSelfHealer;
+  replyFailureWatcher: import("./domain/reply-failure-watcher.js").ReplyFailureWatcher;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   injectWebSocket: (server: any) => void;
 }
@@ -1348,6 +1349,23 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const contextMonitor = new ContextMonitor(db, contextUsageStore, claudeAdapter, compactionEnforcer);
   const { StartupStatusSelfHealer } = await import("./domain/startup-status-self-healer.js");
   const startupStatusSelfHealer = new StartupStatusSelfHealer(db, eventBus, seatStatusStateMachine);
+  // #3 — per-message reply access-failure detection. The detector registry is
+  // the ONLY place that lists harnesses for #3; the watcher is harness-agnostic
+  // and dispatches by map lookup. Reads the native failure signal each
+  // harness's turn-end hook forwards (no pane scraping) and PROPOSES a
+  // reply_failure transition to the shared state machine on an access hit.
+  const { ReplyFailureDetectorRegistry } = await import("./domain/reply-failure/detector.js");
+  const { claudeReplyFailureDetector } = await import("./domain/reply-failure/detectors/claude.js");
+  const { codexReplyFailureDetector } = await import("./domain/reply-failure/detectors/codex.js");
+  const { piReplyFailureDetector } = await import("./domain/reply-failure/detectors/pi.js");
+  const { ReplyFailureWatcher } = await import("./domain/reply-failure-watcher.js");
+  const replyFailureDetectors = new ReplyFailureDetectorRegistry();
+  replyFailureDetectors.register(claudeReplyFailureDetector);
+  replyFailureDetectors.register(codexReplyFailureDetector);
+  replyFailureDetectors.register(piReplyFailureDetector);
+  const replyFailureWatcher = new ReplyFailureWatcher({
+    db, eventBus, detectors: replyFailureDetectors, stateMachine: seatStatusStateMachine,
+  });
   deps.contextMonitor = contextMonitor;
 
   // OPR.0.3.4.9 — periodic snapshot scheduler (crash-insurance floor).
@@ -1357,5 +1375,5 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
 
   const { app, injectWebSocket } = createAppWithWebSocket(deps);
 
-  return { app, db, deps, contextMonitor, startupStatusSelfHealer, injectWebSocket };
+  return { app, db, deps, contextMonitor, startupStatusSelfHealer, replyFailureWatcher, injectWebSocket };
 }

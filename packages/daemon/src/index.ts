@@ -81,7 +81,7 @@ export async function startServer(port?: number) {
   const activityHookUrl =
     readOpenRigEnv("OPENRIG_URL", "RIGGED_URL") ?? deriveActivityHookUrl(bindHosts, p) ?? undefined;
 
-  const { app, contextMonitor, startupStatusSelfHealer, deps, injectWebSocket } = await createDaemon({
+  const { app, contextMonitor, startupStatusSelfHealer, replyFailureWatcher, deps, injectWebSocket } = await createDaemon({
     dbPath,
     bearerToken,
     terminalBearerToken,
@@ -105,6 +105,11 @@ export async function startServer(port?: number) {
         // ready the instant they emit a lifecycle hook (covers pi, which the
         // old runtime-keyed readiness-checker map never registered).
         startupStatusSelfHealer.start();
+        // #3 — flag a seat attention_required the instant a turn-end hook
+        // forwards an access/entitlement failure (auth expired, org removed,
+        // billing lapsed). Reads the native failure signal off each activity
+        // event; no pane scraping, no timer.
+        replyFailureWatcher.start();
         // PL-004 Phase C: start watchdog scheduler. Joins the supervision
         // tree post-bind so the HTTP surface is ready before the first
         // tick (matches contextMonitor pattern).
@@ -140,6 +145,11 @@ export async function startServer(port?: number) {
       deps.periodicSnapshotScheduler?.stop();
     } catch (err) {
       console.error("[periodic-snapshot] shutdown error", err);
+    }
+    try {
+      replyFailureWatcher.stop();
+    } catch (err) {
+      console.error("[reply-failure] shutdown error", err);
     }
     await Promise.all(
       servers.map(

@@ -39,6 +39,13 @@ export type SeatEvidenceKind =
   | "boot_completed_clean" // success: → ready, emit node.startup_ready
   | "launch_failed" // fail(failed): → failed, emit node.startup_failed
   | "launch_attention" // fail(attention_required): → attention_required, emit node.startup_attention_required
+  // #3 — per-message reply access-failure (ReplyFailureWatcher + ContextMonitor backstop).
+  // Applies from pending|ready → attention_required (the core #3 transition plus a
+  // boot-time edge). Intentionally NOT declared for attention_required|failed: a
+  // dead-access seat re-proposing on every Stop is an idempotent no-op (table
+  // absence ⇒ reject ⇒ no write, no emit) — this is the single-owner fix for the
+  // old #3-vs-self-healer race (R5 deleted, not mitigated).
+  | "reply_failure" // a reply access-failure detector hit: → attention_required, emit node.startup_attention_required
   // Recovery (guarded — applies only from failed | attention_required).
   | "positive_activity" // self-healer: → ready, emit nothing
   | "operator_attestation" // reconciler --reason: → ready, emit seat.attention_cleared
@@ -48,6 +55,11 @@ export interface SeatEvidence {
   kind: SeatEvidenceKind;
   /** For launch_failed / launch_attention → node.startup_failed / node.startup_attention_required .error. */
   error?: string;
+  /** For reply_failure → node.startup_attention_required .error (human-readable
+   *  classification of the per-message access failure; used when `error` is
+   *  absent so a reply_failure proposal lands the same way a launch_attention
+   *  does). */
+  detail?: string;
   /** For operator_attestation → seat.attention_cleared.reason. */
   reason?: string;
   /** For evidence_clear → seat.attention_cleared.evidence. */
@@ -83,6 +95,9 @@ const TABLE: Record<SeatStatus, Partial<Record<SeatEvidenceKind, TransitionRule>
     boot_completed_clean: { to: "ready", event: "node.startup_ready" },
     launch_failed: { to: "failed", event: "node.startup_failed" },
     launch_attention: { to: "attention_required", event: "node.startup_attention_required" },
+    // Boot-time reply access-failure (edge): a model reply that dies with an
+    // auth/entitlement error before boot is confirmed still needs attention.
+    reply_failure: { to: "attention_required", event: "node.startup_attention_required" },
   },
   ready: {
     // Orchestrator lifecycle is authoritative; allow re-launch / re-ready from ready.
@@ -90,6 +105,10 @@ const TABLE: Record<SeatStatus, Partial<Record<SeatEvidenceKind, TransitionRule>
     boot_completed_clean: { to: "ready", event: "node.startup_ready" },
     launch_failed: { to: "failed", event: "node.startup_failed" },
     launch_attention: { to: "attention_required", event: "node.startup_attention_required" },
+    // ◀ #3 CORE: a ready seat whose model reply surfaced an access failure
+    // (expired token, out of quota, revoked) becomes attention_required so the
+    // operator can re-auth. Proposed by the ReplyFailureWatcher on every Stop.
+    reply_failure: { to: "attention_required", event: "node.startup_attention_required" },
   },
   failed: {
     positive_activity: { to: "ready", event: null },
@@ -215,7 +234,8 @@ export class SeatStatusStateMachine {
         type: "node.startup_attention_required",
         rigId: seat.rigId,
         nodeId: seat.nodeId,
-        error: evidence.error ?? "",
+        // launch_attention carries `error`; reply_failure carries `detail`.
+        error: evidence.error ?? evidence.detail ?? "",
       };
     }
     if (type === "seat.attention_cleared") {
