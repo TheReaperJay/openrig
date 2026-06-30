@@ -9,10 +9,12 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { NodeLauncher } from "../src/domain/node-launcher.js";
 import { StartupOrchestrator } from "../src/domain/startup-orchestrator.js";
 import { PodRigInstantiator } from "../src/domain/rigspec-instantiator.js";
@@ -45,7 +47,6 @@ function mockFailingAdapter(runtime = "claude-code"): RuntimeAdapter {
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
     launchHarness: vi.fn(async () => ({
       ok: false,
       error: "simulated launch failure for fork-count-gate test",
@@ -53,14 +54,13 @@ function mockFailingAdapter(runtime = "claude-code"): RuntimeAdapter {
   };
 }
 
-function mockSucceedingAdapter(runtime = "claude-code"): RuntimeAdapter {
+function mockSucceedingAdapter(agentActivityStore: AgentActivityStore, runtime = "claude-code"): RuntimeAdapter {
   return {
     runtime,
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
-    launchHarness: vi.fn(async () => ({ ok: true })),
+    launchHarness: vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime }); return { ok: true }; }),
   };
 }
 
@@ -143,6 +143,7 @@ describe("agent_image fork_count gating on launch outcome", () => {
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
     const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
@@ -158,7 +159,7 @@ describe("agent_image fork_count gating on launch outcome", () => {
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,
       startupOrchestrator: startupOrch,
       fsOps,
-      adapters: { "claude-code": failingAdapter, "codex": mockSucceedingAdapter("codex"), "terminal": mockSucceedingAdapter("terminal") },
+      adapters: { "claude-code": failingAdapter, "codex": mockSucceedingAdapter(agentActivityStore, "codex"), "terminal": mockSucceedingAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
       agentImageLibrary: library,
     });
@@ -181,10 +182,11 @@ describe("agent_image fork_count gating on launch outcome", () => {
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
     const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
-    const succeedingAdapter = mockSucceedingAdapter();
+    const succeedingAdapter = mockSucceedingAdapter(agentActivityStore);
     const fsOps = mockFs({ [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl") });
 
     const library = makeStubLibrary();
@@ -194,7 +196,7 @@ describe("agent_image fork_count gating on launch outcome", () => {
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,
       startupOrchestrator: startupOrch,
       fsOps,
-      adapters: { "claude-code": succeedingAdapter, "codex": mockSucceedingAdapter("codex"), "terminal": mockSucceedingAdapter("terminal") },
+      adapters: { "claude-code": succeedingAdapter, "codex": mockSucceedingAdapter(agentActivityStore, "codex"), "terminal": mockSucceedingAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
       agentImageLibrary: library,
     });

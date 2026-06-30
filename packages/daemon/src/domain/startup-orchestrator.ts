@@ -9,6 +9,7 @@ import type {
 } from "./runtime-adapter.js";
 import { isAttentionRequiredReadinessCode, resolveConcreteHint } from "./runtime-adapter.js";
 import type { ProjectionPlan } from "./projection-planner.js";
+import { SeatStatusStateMachine } from "./seat-status-state-machine.js";
 
 // -- Types --
 
@@ -63,6 +64,10 @@ interface StartupOrchestratorDeps {
   sessionRegistry: SessionRegistry;
   eventBus: EventBus;
   tmuxAdapter: TmuxAdapter;
+  /** Single owner of `startup_status` transitions. Optional — defaults to a
+   *  machine built from the same db/sessionRegistry/eventBus so existing
+   *  tests that don't inject one keep working. */
+  stateMachine?: SeatStatusStateMachine;
   /** Read file content for concrete-hint resolution. */
   readFile?: (path: string) => string;
   /** Sleep between paste and submit for tmux-driven TUIs. */
@@ -103,11 +108,13 @@ export class StartupOrchestrator {
     this.sessionRegistry = deps.sessionRegistry;
     this.eventBus = deps.eventBus;
     this.tmuxAdapter = deps.tmuxAdapter;
+    this.stateMachine = deps.stateMachine ?? new SeatStatusStateMachine({ db: deps.db, sessionRegistry: deps.sessionRegistry, eventBus: deps.eventBus });
     this.readFile = deps.readFile ?? (() => "");
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   private readFile: (path: string) => string;
+  private readonly stateMachine: SeatStatusStateMachine;
 
   async startNode(input: StartupInput): Promise<StartupResult> {
     const errors: string[] = [];
@@ -119,9 +126,8 @@ export class StartupOrchestrator {
           ? "rebuilt"
           : "fresh";
 
-    // 1. Mark pending
-    this.sessionRegistry.updateStartupStatus(input.sessionId, "pending");
-    this.eventBus.emit({ type: "node.startup_pending", rigId: input.rigId, nodeId: input.nodeId });
+    // 1. Mark pending (via the single owner — it writes startup_status + emits node.startup_pending)
+    this.stateMachine.transition(input.sessionId, { kind: "launch_started" });
 
     // 2. Project resources
     let projectionResult: ProjectionResult;
@@ -234,9 +240,16 @@ export class StartupOrchestrator {
       }
     }
 
-    // 6. Wait for harness readiness (retry with exponential backoff, 30s timeout)
+    // 6. Wait for harness readiness. Agent seats resolve on the terminal's
+    //    NATIVE SessionStart event (EventBus.subscribe); terminal/legacy seats
+    //    are instant-ready. No poll, no pane inspection.
     try {
-      const readiness = await this.waitForReady(input.adapter, input.binding, input.readinessTimeoutMs ?? 30_000);
+      const readiness = await this.waitForReady(
+        input.adapter,
+        input.binding,
+        input.readinessTimeoutMs ?? 30_000,
+        input.skipHarnessLaunch === true,
+      );
       if (!readiness.ready) {
         if (isAttentionRequiredReadinessCode(readiness.code)) {
           errors.push(`Startup requires attention: ${readiness.reason ?? "unknown"}`);
@@ -301,44 +314,63 @@ export class StartupOrchestrator {
       );
     } catch { /* best-effort persistence */ }
 
-    // 8. Mark ready
-    this.sessionRegistry.updateStartupStatus(input.sessionId, "ready", new Date().toISOString());
-    this.eventBus.emit({ type: "node.startup_ready", rigId: input.rigId, nodeId: input.nodeId });
+    // 8. Mark ready (via the single owner — writes startup_status=ready + startup_completed_at + emits node.startup_ready)
+    this.stateMachine.transition(input.sessionId, { kind: "boot_completed_clean" });
 
     return { ok: true, startupStatus: "ready", continuityOutcome };
   }
 
   /**
-   * Wait for harness readiness with exponential backoff.
-   * Backoff: 1s → 2s → 4s → 8s → 16s (capped), total timeout default 30s.
+   * Wait for harness readiness driven by the terminal's NATIVE ready event.
+   *
+   * Agent seats: resolve the instant a lifecycle hook lands (the harness
+   * fired its SessionStart), via EventBus.subscribe. subscribe() only fires on
+   * events persisted AFTER registration, so a resumed seat (which reuses its
+   * node_id) waits for ITS OWN new SessionStart — never the previous run's
+   * stale hooks. No poll, no watermark, no pane inspection.
+   *
+   * Terminal seats and legacy skip-launch nodes carry no plugin and emit no
+   * hook: nothing to wait for.
    */
   private async waitForReady(
     adapter: RuntimeAdapter,
     binding: NodeBinding,
     timeoutMs: number = 30_000,
+    skipWait: boolean = false,
   ): Promise<import("./runtime-adapter.js").ReadinessResult> {
-    const startTime = Date.now();
-    let delay = 1000; // Start at 1s
-    const maxDelay = 16_000;
+    if (skipWait || adapter.runtime === "terminal") return { ready: true };
+    return this.awaitFirstActivity(binding.nodeId, timeoutMs);
+  }
 
-    while (true) {
-      const result = await adapter.checkReady(binding);
-      if (result.ready) return result;
-      if (isAttentionRequiredReadinessCode(result.code)) {
-        return result;
-      }
-
-      const elapsed = Date.now() - startTime;
-      if (elapsed + delay > timeoutMs) {
-        // One final check before timing out
-        const finalResult = await adapter.checkReady(binding);
-        if (finalResult.ready) return finalResult;
-        return { ready: false, reason: result.reason ?? "readiness timeout" };
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      delay = Math.min(delay * 2, maxDelay);
-    }
+  /**
+   * Resolve on the first `agent.activity` event persisted for this node after
+   * subscription. The harness firing a lifecycle hook proves it booted AND
+   * loaded the mandatory telemetry plugin — a stronger, native signal than
+   * guessing from the pane's foreground process name.
+   */
+  private awaitFirstActivity(nodeId: string, timeoutMs: number): Promise<import("./runtime-adapter.js").ReadinessResult> {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (r: import("./runtime-adapter.js").ReadinessResult) => {
+        if (done) return;
+        done = true;
+        unsub();
+        clearTimeout(timer);
+        resolve(r);
+      };
+      const unsub = this.eventBus.subscribe((event) => {
+        if (event.type === "agent.activity" && event.nodeId === nodeId) {
+          finish({ ready: true });
+        }
+      });
+      const timer = setTimeout(() => {
+        finish({
+          ready: false,
+          reason: "No runtime activity hook (SessionStart) within timeout — harness blocked at a gate or failed to load the telemetry plugin",
+          code: "awaiting_runtime",
+        });
+      }, timeoutMs);
+    });
   }
 
   private safeReadFile(path: string): string {
@@ -351,11 +383,11 @@ export class StartupOrchestrator {
     errors: string[],
     evidence?: string,
   ): StartupResult {
-    this.sessionRegistry.updateStartupStatus(input.sessionId, status);
-    this.eventBus.emit({
-      type: "node.startup_failed",
-      rigId: input.rigId,
-      nodeId: input.nodeId,
+    // Via the single owner — writes startup_status + emits the mapped event:
+    //   launch_failed      → node.startup_failed
+    //   launch_attention   → node.startup_attention_required (distinct from failure)
+    this.stateMachine.transition(input.sessionId, {
+      kind: status === "attention_required" ? "launch_attention" : "launch_failed",
       error: errors.join("; "),
     });
     return { ok: false, startupStatus: status, errors, evidence };

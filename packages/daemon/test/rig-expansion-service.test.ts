@@ -233,7 +233,6 @@ describe("RigExpansionService", () => {
       launchHarness: vi.fn()
         .mockResolvedValueOnce({ ok: true })
         .mockResolvedValueOnce({ ok: false, error: "terminal harness failed" }),
-      checkReady: async () => ({ ready: true }),
     };
 
     setup = createTestApp(db, { adapters: { terminal: failingTerminalAdapter } });
@@ -277,7 +276,6 @@ describe("RigExpansionService", () => {
       project: async () => ({ projected: [], skipped: [], failed: [] }),
       deliverStartup: async () => ({ delivered: 0, failed: [] }),
       launchHarness: async () => ({ ok: false, error: "terminal harness failed" }),
-      checkReady: async () => ({ ready: true }),
     };
 
     setup = createTestApp(db, { adapters: { terminal: failingTerminalAdapter } });

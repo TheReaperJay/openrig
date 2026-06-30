@@ -230,31 +230,6 @@ export class PiCodingAgentAdapter implements RuntimeAdapter {
     return { ok: true };
   }
 
-  async checkReady(binding: NodeBinding): Promise<ReadinessResult> {
-    if (!binding.tmuxSession) {
-      return { ready: false, reason: "No tmux session bound" };
-    }
-    const alive = await this.tmux.hasSession(binding.tmuxSession);
-    if (!alive) {
-      return { ready: false, reason: "tmux session not responsive" };
-    }
-
-    const paneCommand = await this.tmux.getPaneCommand(binding.tmuxSession);
-    const paneContent = (await this.tmux.capturePaneContent(binding.tmuxSession, 40)) ?? "";
-
-    // If the pane is back at a shell, the harness exited or failed to start.
-    if (isShellReady(paneCommand, paneContent)) {
-      return { ready: false, reason: "Pi pane returned to shell instead of staying inside the runtime", code: "returned_to_shell" };
-    }
-
-    // Accept node or pi as the foreground process (pi is a node script).
-    if (paneCommand === "node" || paneCommand === "pi" || paneCommand?.startsWith("pi")) {
-      return { ready: true };
-    }
-
-    return { ready: false, reason: "Pi is not yet the active pane process", code: "awaiting_runtime" };
-  }
-
   // -- Private helpers --
 
   private projectEntry(entry: ProjectionEntry, cwd: string): boolean {

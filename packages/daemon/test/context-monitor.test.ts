@@ -27,7 +27,6 @@ import { RigRepository } from "../src/domain/rig-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { ContextUsageStore } from "../src/domain/context-usage-store.js";
 import { ContextMonitor } from "../src/domain/context-monitor.js";
-import type { ReadinessResult } from "../src/domain/runtime-adapter.js";
 
 const ALL_MIGRATIONS = [
   coreSchema, bindingsSessionsSchema, eventsSchema, snapshotsSchema,
@@ -48,7 +47,6 @@ describe("ContextMonitor", () => {
   let store: ContextUsageStore;
   let monitor: ContextMonitor;
   let ensureContextCollectorSpy: ReturnType<typeof vi.fn>;
-  let checkReadySpy: ReturnType<typeof vi.fn>;
   let tmpDir: string;
   let codexHomeDir: string;
 
@@ -63,10 +61,8 @@ describe("ContextMonitor", () => {
     mkdirSync(join(codexHomeDir, ".codex"), { recursive: true });
     store = new ContextUsageStore(db, { stateDir: tmpDir, codexHomeDir });
     ensureContextCollectorSpy = vi.fn();
-    checkReadySpy = vi.fn(async (): Promise<ReadinessResult> => ({ ready: false, reason: "not_ready", code: "awaiting_runtime" }));
     monitor = new ContextMonitor(db, store, {
       ensureContextCollector: ensureContextCollectorSpy,
-      checkReady: checkReadySpy,
     });
   });
 
@@ -294,118 +290,5 @@ describe("ContextMonitor", () => {
     const usage = store.getForNode(node.id, "orch-lead@test");
     expect(usage.availability).toBe("unknown");
     expect(usage.reason).toBe("no_data");
-  });
-
-  it("pollOnce normalizes stale Claude startup failures back to ready when the runtime is live", async () => {
-    const { sessionName, session } = (() => {
-      const rig = rigRepo.createRig("test-rig-5");
-      const node = rigRepo.addNode(rig.id, "dev.impl", { runtime: "claude-code", cwd: "/project" });
-      const session = sessionRegistry.registerSession(node.id, "dev-impl@test");
-      db.prepare("UPDATE sessions SET status = 'running', startup_status = 'failed' WHERE id = ?").run(session.id);
-      return { sessionName: "dev-impl@test", session };
-    })();
-    writeSidecar(sessionName, VALID_SIDECAR);
-    checkReadySpy.mockResolvedValue({ ready: true });
-
-    await monitor.pollOnce();
-
-    const refreshed = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(session.id) as { startup_status: string };
-    expect(refreshed.startup_status).toBe("ready");
-    expect(checkReadySpy).toHaveBeenCalledWith(expect.objectContaining({
-      nodeId: session.nodeId,
-      tmuxSession: sessionName,
-      cwd: "/project",
-    }));
-  });
-
-  it("pollOnce normalizes stale Claude startup failures to attention_required when the runtime is blocked on trust", async () => {
-    const { sessionName, session } = (() => {
-      const rig = rigRepo.createRig("test-rig-5b");
-      const node = rigRepo.addNode(rig.id, "dev.impl", { runtime: "claude-code", cwd: "/project" });
-      const session = sessionRegistry.registerSession(node.id, "dev-impl-trust@test");
-      db.prepare("UPDATE sessions SET status = 'running', startup_status = 'failed' WHERE id = ?").run(session.id);
-      return { sessionName: "dev-impl-trust@test", session };
-    })();
-    writeSidecar(sessionName, { ...VALID_SIDECAR, session_name: sessionName });
-    checkReadySpy.mockResolvedValue({
-      ready: false,
-      code: "trust_gate",
-      reason: "Claude is waiting for workspace trust approval before the session can become interactive.",
-    });
-
-    await monitor.pollOnce();
-
-    const refreshed = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(session.id) as { startup_status: string };
-    expect(refreshed.startup_status).toBe("attention_required");
-  });
-
-  it("pollOnce leaves stale Claude startup failures as failed when the runtime has really fallen back to shell", async () => {
-    const { sessionName, session } = (() => {
-      const rig = rigRepo.createRig("test-rig-5c");
-      const node = rigRepo.addNode(rig.id, "dev.impl", { runtime: "claude-code", cwd: "/project" });
-      const session = sessionRegistry.registerSession(node.id, "dev-impl-shell@test");
-      db.prepare("UPDATE sessions SET status = 'running', startup_status = 'failed' WHERE id = ?").run(session.id);
-      return { sessionName: "dev-impl-shell@test", session };
-    })();
-    writeSidecar(sessionName, { ...VALID_SIDECAR, session_name: sessionName });
-    checkReadySpy.mockResolvedValue({
-      ready: false,
-      code: "returned_to_shell",
-      reason: "The probe pane returned to a shell instead of staying inside the runtime.",
-    });
-
-    await monitor.pollOnce();
-
-    const refreshed = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(session.id) as { startup_status: string };
-    expect(refreshed.startup_status).toBe("failed");
-  });
-
-  it("pollOnce normalizes stale Codex attention_required state after the trust prompt is cleared", async () => {
-    const rig = rigRepo.createRig("test-rig-codex-trust");
-    const node = rigRepo.addNode(rig.id, "dev.qa", { runtime: "codex", cwd: "/project" });
-    const session = sessionRegistry.registerSession(node.id, "dev-qa-trust@test");
-    db.prepare("UPDATE sessions SET status = 'running', startup_status = 'attention_required', resume_token = NULL WHERE id = ?")
-      .run(session.id);
-
-    const codexReadySpy = vi.fn(async (): Promise<ReadinessResult> => ({ ready: true }));
-    monitor = new ContextMonitor(db, store, {
-      ensureContextCollector: ensureContextCollectorSpy,
-      checkReady: checkReadySpy,
-    }, undefined, {
-      "claude-code": { checkReady: checkReadySpy },
-      codex: { checkReady: codexReadySpy },
-    });
-
-    await monitor.pollOnce();
-
-    const refreshed = db.prepare("SELECT startup_status, startup_completed_at FROM sessions WHERE id = ?").get(session.id) as {
-      startup_status: string;
-      startup_completed_at: string | null;
-    };
-    expect(refreshed.startup_status).toBe("ready");
-    expect(refreshed.startup_completed_at).toBeTruthy();
-    expect(codexReadySpy).toHaveBeenCalledWith(expect.objectContaining({
-      nodeId: session.nodeId,
-      tmuxSession: "dev-qa-trust@test",
-      cwd: "/project",
-    }));
-  });
-
-  it("pollOnce does not overwrite pending Claude startup state", async () => {
-    const { sessionName, session } = (() => {
-      const rig = rigRepo.createRig("test-rig-6");
-      const node = rigRepo.addNode(rig.id, "dev.impl", { runtime: "claude-code", cwd: "/project" });
-      const session = sessionRegistry.registerSession(node.id, "dev-impl-pending@test");
-      db.prepare("UPDATE sessions SET status = 'running', startup_status = 'pending' WHERE id = ?").run(session.id);
-      return { sessionName: "dev-impl-pending@test", session };
-    })();
-    writeSidecar(sessionName, { ...VALID_SIDECAR, session_name: sessionName });
-    checkReadySpy.mockResolvedValue({ ready: true });
-
-    await monitor.pollOnce();
-
-    const refreshed = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(session.id) as { startup_status: string };
-    expect(refreshed.startup_status).toBe("pending");
-    expect(checkReadySpy).not.toHaveBeenCalled();
   });
 });

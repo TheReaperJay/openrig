@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { SnapshotRepository } from "../src/domain/snapshot-repository.js";
 import { CheckpointStore } from "../src/domain/checkpoint-store.js";
 import { SnapshotCapture } from "../src/domain/snapshot-capture.js";
@@ -16,10 +18,11 @@ describe("AS-T09: Continuity + snapshot/restore evolution", () => {
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const snapshotRepo = new SnapshotRepository(db);
     const checkpointStore = new CheckpointStore(db);
     const snapshotCapture = new SnapshotCapture({ db, rigRepo, sessionRegistry, eventBus, snapshotRepo, checkpointStore });
-    return { db, rigRepo, podRepo, sessionRegistry, eventBus, snapshotRepo, checkpointStore, snapshotCapture };
+    return { db, rigRepo, podRepo, sessionRegistry, eventBus, agentActivityStore, snapshotRepo, checkpointStore, snapshotCapture };
   }
 
   function seedRigWithPod(ctx: ReturnType<typeof setup>) {
@@ -261,8 +264,7 @@ describe("AS-T09: Continuity + snapshot/restore evolution", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async (...args: unknown[]) => { projectCalls.push(args); return { projected: [], skipped: [], failed: [] }; }),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
-      launchHarness: vi.fn(async () => ({ ok: true })),
+      launchHarness: vi.fn(async (binding) => { simulateSessionStart(ctx.agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" }); return { ok: true }; }),
     };
 
     const mockTmux = { createSession: vi.fn(async () => ({ ok: true })), killSession: vi.fn(async () => ({ ok: true })), listSessions: vi.fn(async () => []), hasSession: vi.fn(async () => true), sendText: vi.fn(async () => ({ ok: true })), sendKeys: vi.fn(async () => ({ ok: true })), listWindows: vi.fn(async () => []), listPanes: vi.fn(async () => []) } as any;
@@ -285,7 +287,7 @@ describe("AS-T09: Continuity + snapshot/restore evolution", () => {
     if (result.ok) {
       // Startup replay should have called adapter.project (via StartupOrchestrator)
       expect(mockAdapter.project).toHaveBeenCalled();
-      expect(mockAdapter.checkReady).toHaveBeenCalled();
+      expect(mockAdapter.launchHarness).toHaveBeenCalled();
       // Node honestly reports its restore outcome (mock resume didn't actually resume)
       const nodeResult = result.result.nodes.find((n) => n.nodeId === node.id);
       // Status reflects actual resume outcome, not assumed success

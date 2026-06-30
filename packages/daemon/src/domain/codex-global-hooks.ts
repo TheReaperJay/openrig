@@ -1,5 +1,7 @@
 import nodePath from "node:path";
 import { createHash } from "node:crypto";
+import * as toml from "@iarna/toml";
+import type { JsonMap } from "@iarna/toml";
 
 // Codex's hook loader reads ~/.codex/hooks.json (user-global). NOT
 // per-cwd .codex/hooks.json — that path is decorative. This module
@@ -199,11 +201,10 @@ function upsertCodexTrustEntries(
   home: string,
   entries: Array<{ key: string; trustedHash: string }>,
 ): void {
-  let parsed: Record<string, unknown>;
+  let parsed: JsonMap;
   const configPath = nodePath.join(home, ".codex", "config.toml");
   if (fs.exists(configPath)) {
-    const { parse } = require("@iarna/toml");
-    parsed = parse(fs.readFile(configPath)) as Record<string, unknown>;
+    parsed = toml.parse(fs.readFile(configPath));
   } else {
     parsed = {};
   }
@@ -220,8 +221,7 @@ function upsertCodexTrustEntries(
     changed = true;
   }
   if (!changed) return;
-  const { stringify } = require("@iarna/toml");
-  const serialized = stringify(parsed);
+  const serialized = toml.stringify(parsed);
   fs.mkdirp(nodePath.dirname(configPath));
   fs.writeFile(configPath, serialized);
 }

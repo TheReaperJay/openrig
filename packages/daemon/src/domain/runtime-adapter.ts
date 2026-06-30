@@ -120,10 +120,13 @@ export interface ForkSource {
 }
 
 /**
- * The five-method runtime adapter contract.
- * Adapters own projection, delivery, harness launch, reconciliation, and readiness.
- * Startup action execution is NOT part of this contract — that belongs
- * to the startup orchestrator after checkReady().
+ * The four-method runtime adapter contract.
+ * Adapters own projection, delivery, harness launch, and reconciliation.
+ * Readiness is NOT part of this contract — it is event-driven: the startup
+ * orchestrator resolves on the terminal's native lifecycle hook via
+ * EventBus.subscribe (see StartupOrchestrator.awaitFirstActivity), and
+ * StartupStatusSelfHealer self-heals stuck seats the same way. Adapters do
+ * not participate in readiness and never inspect the tmux pane.
  */
 export interface RuntimeAdapter {
   readonly runtime: string;
@@ -149,7 +152,4 @@ export interface RuntimeAdapter {
     binding: NodeBinding,
     opts: { name: string; resumeToken?: string; forkSource?: ForkSource },
   ): Promise<HarnessLaunchResult>;
-
-  /** Check if the runtime harness is responsive and ready. */
-  checkReady(binding: NodeBinding): Promise<ReadinessResult>;
 }

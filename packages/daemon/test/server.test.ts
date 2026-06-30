@@ -69,7 +69,6 @@ function buildFullDeps(db: ReturnType<typeof createFullTestDb>, overrides?: { sn
     listInstalled: async () => [],
     project: async () => ({ projected: [], skipped: [], failed: [] }),
     deliverStartup: async () => ({ delivered: 0, failed: [] }),
-    checkReady: async () => ({ ready: true }),
   };
   const podInstantiator = new PodRigInstantiator({
     db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,

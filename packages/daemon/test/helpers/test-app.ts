@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { makeHookFiringLaunchHarness } from "./simulate-hook.js";
 import type Database from "better-sqlite3";
 import { createDb } from "../../src/db/connection.js";
 import { migrate } from "../../src/db/migrate.js";
@@ -115,14 +116,13 @@ export function unavailableCmuxAdapter(): CmuxAdapter {
   return new CmuxAdapter(factory, { timeoutMs: 50 });
 }
 
-function readyRuntimeAdapter(runtime: string): RuntimeAdapter {
+function readyRuntimeAdapter(runtime: string, store: AgentActivityStore): RuntimeAdapter {
   return {
     runtime,
     listInstalled: async () => [],
     project: async () => ({ projected: [], skipped: [], failed: [] }),
     deliverStartup: async () => ({ delivered: 0, failed: [] }),
-    launchHarness: async () => ({ ok: true }),
-    checkReady: async () => ({ ready: true }),
+    launchHarness: makeHookFiringLaunchHarness(store, runtime),
   };
 }
 
@@ -163,6 +163,7 @@ export function createTestApp(
   const rigRepo = new RigRepository(db);
   const sessionRegistry = new SessionRegistry(db);
   const eventBus = new EventBus(db);
+  const agentActivityStore = new AgentActivityStore({ db, eventBus });
   const tmux = opts?.tmux ?? mockTmuxAdapter();
   const cmux = opts?.cmux ?? unavailableCmuxAdapter();
   const transcriptStore = new TranscriptStore("/tmp/openrig-test-transcripts");
@@ -209,9 +210,10 @@ export function createTestApp(
   const packageInstallService = new PackageInstallService({ packageRepo, installRepo, installEngine, installVerifier });
   const startupOrchestrator = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
   const adapters: Record<string, RuntimeAdapter> = {
-    terminal: readyRuntimeAdapter("terminal"),
-    "claude-code": readyRuntimeAdapter("claude-code"),
-    codex: readyRuntimeAdapter("codex"),
+    terminal: readyRuntimeAdapter("terminal", agentActivityStore),
+    "claude-code": readyRuntimeAdapter("claude-code", agentActivityStore),
+    codex: readyRuntimeAdapter("codex", agentActivityStore),
+    "pi-coding-agent": readyRuntimeAdapter("pi-coding-agent", agentActivityStore),
     ...opts?.adapters,
   };
   const podInstantiator = new PodRigInstantiator({
@@ -252,10 +254,6 @@ export function createTestApp(
   const whoamiService = new WhoamiService({ db, rigRepo, sessionRegistry, transcriptStore, contextUsageStore });
   const cmuxTmux = { ...tmux, hasSession: vi.fn(async () => true) } as unknown as TmuxAdapter;
   const nodeCmuxService = new NodeCmuxService(rigRepo, sessionRegistry, cmux, cmuxTmux);
-  const agentActivityStore = new AgentActivityStore({
-    db,
-    eventBus,
-  });
 
   const podBundleSourceResolver = new PodBundleSourceResolver();
 

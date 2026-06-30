@@ -43,8 +43,4 @@ export class TerminalAdapter implements RuntimeAdapter {
     }
     return { ok: true };
   }
-
-  async checkReady(_binding: NodeBinding): Promise<ReadinessResult> {
-    return { ready: true };
-  }
 }

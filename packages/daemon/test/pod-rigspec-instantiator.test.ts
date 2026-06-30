@@ -4,6 +4,8 @@ import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { NodeLauncher } from "../src/domain/node-launcher.js";
 import { StartupOrchestrator } from "../src/domain/startup-orchestrator.js";
 import { PodRigInstantiator } from "../src/domain/rigspec-instantiator.js";
@@ -26,14 +28,16 @@ function mockTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function mockAdapter(runtime = "claude-code"): RuntimeAdapter {
+function mockAdapter(agentActivityStore: import("../src/domain/agent-activity-store.js").AgentActivityStore, runtime = "claude-code"): RuntimeAdapter {
   return {
     runtime,
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
-    launchHarness: vi.fn(async () => ({ ok: true })),
+    launchHarness: vi.fn(async (binding: import("../src/domain/runtime-adapter.js").NodeBinding) => {
+      simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime });
+      return { ok: true };
+    }),
   };
 }
 
@@ -66,21 +70,22 @@ describe("PodRigInstantiator", () => {
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
     const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
-    const adapter = mockAdapter();
-    const codexAdapter = mockAdapter("codex");
+    const adapter = mockAdapter(agentActivityStore);
+    const codexAdapter = mockAdapter(agentActivityStore, "codex");
     const files = fsFiles ?? { [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl") };
     const fsOps = mockFs(files);
 
     const inst = new PodRigInstantiator({
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher, startupOrchestrator: startupOrch,
-      fsOps, adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+      fsOps, adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
     });
 
-    return { db, rigRepo, podRepo, sessionRegistry, eventBus, inst, adapter, codexAdapter, tmux };
+    return { db, rigRepo, podRepo, sessionRegistry, eventBus, inst, adapter, codexAdapter, tmux, agentActivityStore };
   }
 
   // T1: valid rig instantiates pods + nodes + edges
@@ -119,7 +124,7 @@ describe("PodRigInstantiator", () => {
     const result = await inst.instantiate(yaml, RIG_ROOT);
     expect(result.ok).toBe(true);
     expect(adapter.project).toHaveBeenCalled();
-    expect(adapter.checkReady).toHaveBeenCalled();
+    expect(adapter.launchHarness).toHaveBeenCalled();
     db.close();
   });
 
@@ -172,10 +177,11 @@ describe("PodRigInstantiator", () => {
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
     const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
-    const adapter = mockAdapter();
+    const adapter = mockAdapter(agentActivityStore);
     const fsOps = mockFs({
       [`${RIG_ROOT}/agents/impl/agent.yaml`]: `
 name: impl
@@ -204,7 +210,7 @@ profiles:
 
     const inst = new PodRigInstantiator({
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher, startupOrchestrator: startupOrch,
-      fsOps, adapters: { "claude-code": adapter, codex: mockAdapter(), terminal: mockAdapter() },
+      fsOps, adapters: { "claude-code": adapter, codex: mockAdapter(agentActivityStore), terminal: mockAdapter(agentActivityStore) },
       tmuxAdapter: tmux,
     });
 
@@ -285,6 +291,7 @@ profiles:
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
 
@@ -302,7 +309,7 @@ profiles:
       return origStartNode(input);
     };
 
-    const adapter = mockAdapter();
+    const adapter = mockAdapter(agentActivityStore);
     const fsOps = mockFs(files);
     const inst = new PodRigInstantiator({
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,
@@ -675,6 +682,7 @@ profiles:
     const podRepo = new PodRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
     // Adapter that fails at project (after launch)
@@ -683,7 +691,6 @@ profiles:
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [{ effectiveId: "x", error: "disk full" }] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: vi.fn(async () => ({ ok: true })),
     };
     const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
@@ -810,7 +817,7 @@ state: 2-named
     // Post-fix it documents the OLD behavior so the discriminator is clear.
     // This test passes post-fix because we now preserve the recoverable
     // state — it asserts the NEW expected shape (no tear-down).
-    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux } = setup({
+    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux, agentActivityStore } = setup({
       [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
       [`${RIG_ROOT}/agents/qa/agent.yaml`]: agentYaml("qa"),
     });
@@ -834,7 +841,7 @@ state: 2-named
         [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
         [`${RIG_ROOT}/agents/qa/agent.yaml`]: agentYaml("qa"),
       }),
-      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
     });
 
@@ -880,7 +887,7 @@ state: 2-named
   });
 
   it("HG-3 attention_required result carries the attentionNodes list (operator approve→resume path)", async () => {
-    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux } = setup({
+    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux, agentActivityStore } = setup({
       [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
     });
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
@@ -898,7 +905,7 @@ state: 2-named
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,
       startupOrchestrator: startupOrch,
       fsOps: mockFs({ [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl") }),
-      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
     });
     const yaml = RigSpecCodec.serialize(makeRigSpec());
@@ -916,7 +923,7 @@ state: 2-named
   });
 
   it("HG-2 mixed: one attention_required + one launched → rig preserved (ok:true) with attention warnings", async () => {
-    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux } = setup({
+    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux, agentActivityStore } = setup({
       [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
       [`${RIG_ROOT}/agents/qa/agent.yaml`]: agentYaml("qa"),
     });
@@ -944,7 +951,7 @@ state: 2-named
         [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
         [`${RIG_ROOT}/agents/qa/agent.yaml`]: agentYaml("qa"),
       }),
-      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
     });
 
@@ -975,7 +982,7 @@ state: 2-named
   });
 
   it("HG-2 negative: all-TERMINALLY-failed still tears down (no regression to terminal-failure cleanup)", async () => {
-    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux } = setup({
+    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux, agentActivityStore } = setup({
       [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
     });
     const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
@@ -992,7 +999,7 @@ state: 2-named
       db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,
       startupOrchestrator: startupOrch,
       fsOps: mockFs({ [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl") }),
-      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
     });
     const yaml = RigSpecCodec.serialize(makeRigSpec());
@@ -1009,7 +1016,7 @@ state: 2-named
   });
 
   it("HG-2 negative: at least one terminal failure + at least one attention_required → rig PRESERVED (recoverable wins over tear-down)", async () => {
-    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux } = setup({
+    const { db, rigRepo, sessionRegistry, eventBus, podRepo, adapter, codexAdapter, tmux, agentActivityStore } = setup({
       [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
       [`${RIG_ROOT}/agents/qa/agent.yaml`]: agentYaml("qa"),
     });
@@ -1037,7 +1044,7 @@ state: 2-named
         [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl"),
         [`${RIG_ROOT}/agents/qa/agent.yaml`]: agentYaml("qa"),
       }),
-      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+      adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
       tmuxAdapter: tmux,
     });
     const yaml = RigSpecCodec.serialize(makeRigSpec({

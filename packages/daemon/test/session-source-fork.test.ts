@@ -10,6 +10,8 @@ import { TerminalAdapter } from "../src/adapters/terminal-adapter.js";
 import { StartupOrchestrator, type StartupInput } from "../src/domain/startup-orchestrator.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import type { RuntimeAdapter, NodeBinding, ForkSource } from "../src/domain/runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
@@ -655,14 +657,14 @@ function mockOrchTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function makeStubAdapter(forkResumeToken: string): RuntimeAdapter {
+function makeStubAdapter(agentActivityStore: AgentActivityStore, forkResumeToken: string): RuntimeAdapter {
   return {
     runtime: "claude-code",
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
-    launchHarness: vi.fn(async (_binding, opts) => {
+    launchHarness: vi.fn(async (binding, opts) => {
+      simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" });
       // Honest identity rule: the captured token IS the new post-fork token.
       if (opts.forkSource) {
         return { ok: true, resumeToken: forkResumeToken, resumeType: "claude_id" };
@@ -680,12 +682,14 @@ describe("StartupOrchestrator forkSource integration", () => {
   let db: Database.Database;
   let sessionRegistry: SessionRegistry;
   let eventBus: EventBus;
+  let agentActivityStore: AgentActivityStore;
   let rigRepo: RigRepository;
 
   beforeEach(() => {
     db = createFullTestDb();
     sessionRegistry = new SessionRegistry(db);
     eventBus = new EventBus(db);
+    agentActivityStore = new AgentActivityStore({ db, eventBus });
     rigRepo = new RigRepository(db);
   });
   afterEach(() => { db.close(); });
@@ -704,7 +708,7 @@ describe("StartupOrchestrator forkSource integration", () => {
       nodeId: s.nodeId,
       sessionId: s.sessionId,
       binding: { id: "b1", nodeId: s.nodeId, tmuxSession: "r01-impl", tmuxWindow: null, tmuxPane: null, cmuxWorkspace: null, cmuxSurface: null, updatedAt: "", cwd: "." },
-      adapter: makeStubAdapter("NEW-POST-FORK-TOKEN-aaa"),
+      adapter: makeStubAdapter(agentActivityStore, "NEW-POST-FORK-TOKEN-aaa"),
       plan: emptyPlan(),
       resolvedStartupFiles: [],
       startupActions: [],
@@ -747,7 +751,7 @@ describe("StartupOrchestrator forkSource integration", () => {
   it("passes forkSource through to adapter.launchHarness opts (not resumeToken)", async () => {
     const s = seed();
     const orch = createOrch();
-    const adapter = makeStubAdapter("any-token");
+    const adapter = makeStubAdapter(agentActivityStore, "any-token");
     const launchSpy = adapter.launchHarness as ReturnType<typeof vi.fn>;
     const forkSource: ForkSource = { kind: "native_id", value: "PARENT-TOKEN" };
 

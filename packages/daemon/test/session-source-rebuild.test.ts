@@ -11,6 +11,8 @@ import { resolveRebuildArtifacts } from "../src/domain/session-source-rebuild-re
 import { StartupOrchestrator, type StartupInput } from "../src/domain/startup-orchestrator.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import type { RuntimeAdapter, NodeBinding, ResolvedStartupFile } from "../src/domain/runtime-adapter.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
@@ -275,16 +277,15 @@ function mockOrchTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function makeStubAdapter(): RuntimeAdapter {
+function makeStubAdapter(agentActivityStore: AgentActivityStore): RuntimeAdapter {
   return {
     runtime: "claude-code",
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
     // Fresh-launch shape: returns ok with NO resumeToken (rebuild seats have
     // no native runtime conversation to resume from).
-    launchHarness: vi.fn(async () => ({ ok: true })),
+    launchHarness: vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" }); return { ok: true }; }),
   };
 }
 
@@ -296,12 +297,14 @@ describe("StartupOrchestrator rebuild integration", () => {
   let db: Database.Database;
   let sessionRegistry: SessionRegistry;
   let eventBus: EventBus;
+  let agentActivityStore: AgentActivityStore;
   let rigRepo: RigRepository;
 
   beforeEach(() => {
     db = createFullTestDb();
     sessionRegistry = new SessionRegistry(db);
     eventBus = new EventBus(db);
+    agentActivityStore = new AgentActivityStore({ db, eventBus });
     rigRepo = new RigRepository(db);
   });
   afterEach(() => { db.close(); });
@@ -320,7 +323,7 @@ describe("StartupOrchestrator rebuild integration", () => {
       nodeId: s.nodeId,
       sessionId: s.sessionId,
       binding: { id: "b1", nodeId: s.nodeId, tmuxSession: "r01-writer", tmuxWindow: null, tmuxPane: null, cmuxWorkspace: null, cmuxSurface: null, updatedAt: "", cwd: "." },
-      adapter: makeStubAdapter(),
+      adapter: makeStubAdapter(agentActivityStore),
       plan: emptyPlan(),
       resolvedStartupFiles: [],
       startupActions: [],
@@ -358,7 +361,7 @@ describe("StartupOrchestrator rebuild integration", () => {
 
   it("calls adapter.launchHarness with NO resumeToken AND NO forkSource on rebuild", async () => {
     const s = seed();
-    const adapter = makeStubAdapter();
+    const adapter = makeStubAdapter(agentActivityStore);
     const launchSpy = adapter.launchHarness as ReturnType<typeof vi.fn>;
     const orch = createOrch();
     await orch.startNode(makeInput(s, { adapter, rebuildArtifacts: makeRebuildArtifacts() }));
@@ -380,7 +383,7 @@ describe("StartupOrchestrator rebuild integration", () => {
 
   it("hands rebuild artifacts to adapter.deliverStartup (post-launch delivery via send_text)", async () => {
     const s = seed();
-    const adapter = makeStubAdapter();
+    const adapter = makeStubAdapter(agentActivityStore);
     const deliverSpy = adapter.deliverStartup as ReturnType<typeof vi.fn>;
     const orch = createOrch();
     const artifacts = makeRebuildArtifacts();
@@ -414,11 +417,10 @@ describe("StartupOrchestrator rebuild integration", () => {
 
   it("fork path (forkSource set) is unchanged by rebuild plumbing: continuityOutcome=forked", async () => {
     const s = seed();
-    const adapter = makeStubAdapter();
-    (adapter.launchHarness as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      resumeToken: "NEW-FORK-TOKEN",
-      resumeType: "claude_id",
+    const adapter = makeStubAdapter(agentActivityStore);
+    (adapter.launchHarness as ReturnType<typeof vi.fn>).mockImplementation(async (binding) => {
+      simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" });
+      return { ok: true, resumeToken: "NEW-FORK-TOKEN", resumeType: "claude_id" };
     });
     const orch = createOrch();
     const result = await orch.startNode(makeInput(s, {

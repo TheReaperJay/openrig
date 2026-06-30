@@ -298,7 +298,7 @@ function deriveHeldReason(db: Database.Database, rigId: string, nodeId: string, 
 
 function getLatestError(db: Database.Database, rigId: string, nodeId: string): string | null {
   const row = db.prepare(
-    "SELECT payload FROM events WHERE rig_id = ? AND node_id = ? AND type = 'node.startup_failed' ORDER BY seq DESC LIMIT 1"
+    "SELECT payload FROM events WHERE rig_id = ? AND node_id = ? AND type IN ('node.startup_failed','node.startup_attention_required') ORDER BY seq DESC LIMIT 1"
   ).get(rigId, nodeId) as { payload: string } | undefined;
 
   if (!row) return null;

@@ -7,7 +7,7 @@ import Database from "better-sqlite3";
 import type { TmuxAdapter } from "./tmux.js";
 import type {
   RuntimeAdapter, NodeBinding, ResolvedStartupFile,
-  InstalledResource, ProjectionResult, StartupDeliveryResult, ReadinessResult,
+  InstalledResource, ProjectionResult, StartupDeliveryResult,
   HarnessLaunchResult,
 } from "../domain/runtime-adapter.js";
 import { resolveConcreteHint } from "../domain/runtime-adapter.js";
@@ -306,27 +306,6 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
       || nodePath.join(this.fs.homedir ?? os.homedir(), ".openrig", "shared-docs");
     const queueStateRoot = nodePath.join(sharedDocsRoot, "rigs", identity.rig, "state", identity.pod);
     return ` --add-dir ${shellQuote(queueStateRoot)}`;
-  }
-
-  async checkReady(binding: NodeBinding): Promise<ReadinessResult> {
-    if (!binding.tmuxSession) {
-      return { ready: false, reason: "No tmux session bound" };
-    }
-    const alive = await this.tmux.hasSession(binding.tmuxSession);
-    if (!alive) {
-      return { ready: false, reason: "tmux session not responsive" };
-    }
-
-    const paneCommand = await this.tmux.getPaneCommand(binding.tmuxSession);
-    const paneContent = (await this.tmux.capturePaneContent(binding.tmuxSession, 40)) ?? "";
-    const probe = assessNativeResumeProbe({
-      runtime: "codex",
-      paneCommand,
-      paneContent,
-    });
-
-    if (probe.status === "resumed") return { ready: true };
-    return { ready: false, reason: probe.detail, code: probe.code };
   }
 
   private async dismissSkippableCodexUpdatePrompt(tmuxSession: string, attempts = 6): Promise<boolean> {

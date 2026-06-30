@@ -28,6 +28,8 @@ import type { CodexResumeAdapter } from "../src/adapters/codex-resume.js";
 import type { ResumeResult } from "../src/adapters/claude-resume.js";
 import type { PersistedEvent, Snapshot } from "../src/domain/types.js";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 
 function setupDb(): Database.Database {
   return createFullTestDb();
@@ -67,6 +69,7 @@ describe("RestoreOrchestrator", () => {
   let rigRepo: RigRepository;
   let sessionRegistry: SessionRegistry;
   let eventBus: EventBus;
+  let agentActivityStore: AgentActivityStore;
   let snapshotRepo: SnapshotRepository;
   let checkpointStore: CheckpointStore;
   let snapshotCapture: SnapshotCapture;
@@ -76,6 +79,7 @@ describe("RestoreOrchestrator", () => {
     rigRepo = new RigRepository(db);
     sessionRegistry = new SessionRegistry(db);
     eventBus = new EventBus(db);
+    agentActivityStore = new AgentActivityStore({ db, eventBus });
     snapshotRepo = new SnapshotRepository(db);
     checkpointStore = new CheckpointStore(db);
     snapshotCapture = new SnapshotCapture({ db, rigRepo, sessionRegistry, eventBus, snapshotRepo, checkpointStore });
@@ -1075,13 +1079,12 @@ describe("RestoreOrchestrator", () => {
     sessionRegistry.updateStatus(session.id, "exited");
     db.prepare("DELETE FROM bindings WHERE node_id = ?").run(node.id);
 
-    const launchSpy = vi.fn(async () => ({ ok: true as const, resumeToken: "new-token", resumeType: "claude_id" }));
+    const launchSpy = vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" }); return { ok: true as const, resumeToken: "new-token", resumeType: "claude_id" }; });
     const mockAdapter = {
       runtime: "claude-code",
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: launchSpy,
     };
 
@@ -1123,7 +1126,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: vi.fn(async () => ({ ok: false as const, error: "Claude resume failed: no conversation found" })),
     };
 
@@ -1156,7 +1158,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: launchSpy,
     };
 
@@ -1186,7 +1187,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness,
     };
 
@@ -1239,7 +1239,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: vi.fn(async () => ({ ok: true as const, resumeToken: "fresh-claude-token", resumeType: "claude_id" })),
     };
 
@@ -1275,7 +1274,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness,
     };
 
@@ -1309,7 +1307,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: vi.fn(async () => ({ ok: true as const, resumeToken: "fresh-codex-token", resumeType: "codex_id" })),
     };
 
@@ -1345,7 +1342,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness,
     };
 
@@ -1382,7 +1378,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness,
     };
 
@@ -1426,7 +1421,6 @@ describe("RestoreOrchestrator", () => {
         listInstalled: vi.fn(async () => []),
         project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
         deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-        checkReady: vi.fn(async () => ({ ready: true })),
         launchHarness,
       };
 
@@ -1461,8 +1455,7 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
-      launchHarness: vi.fn(async () => ({ ok: true as const, resumeToken: "fresh-token", resumeType: "claude_id" })),
+      launchHarness: vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" }); return { ok: true as const, resumeToken: "fresh-token", resumeType: "claude_id" }; }),
     };
 
     const orch = createOrchestrator();
@@ -1473,60 +1466,6 @@ describe("RestoreOrchestrator", () => {
       const nodeResult = result.result.nodes.find((n) => n.nodeId === node.id);
       expect(nodeResult!.status).toBe("fresh-primed");
     }
-  });
-
-  // Updated by codex-auth-refusal-attention-required slice (revision 2):
-  // pod-aware nodes whose StartupOrchestrator returns
-  // `startupStatus: "attention_required"` (any attention-required readiness
-  // code: update_gate, trust_gate, mcp_gate, login_required, or the new
-  // codex_auth_refusal) now surface to RestoreNodeResult honestly as
-  // `status: "attention_required"` instead of being collapsed to "failed".
-  // This was previously a per-slice pinned dishonesty: the test name said
-  // "fails when ... update gate" while the error string already said
-  // "Restore startup requires attention", and the session-row
-  // startupStatus was already "attention_required". The patch aligns the
-  // RestoreNodeResult status with the already-honest startupStatus.
-  it("pod-aware Codex restore without resume metadata surfaces attention_required when fresh startup hits an update gate", async () => {
-    const rig = rigRepo.createRig("test-rig");
-    db.prepare("INSERT INTO pods (id, rig_id, label) VALUES (?, ?, ?)").run("pod-codex-update", rig.id, "Dev");
-    const node = rigRepo.addNode(rig.id, "dev.qa", { runtime: "codex", podId: "pod-codex-update" });
-    const session = sessionRegistry.registerSession(node.id, "dev-qa@test-rig");
-    sessionRegistry.updateStatus(session.id, "running");
-    db.prepare("INSERT INTO node_startup_context (node_id, projection_entries_json, resolved_files_json, startup_actions_json, runtime) VALUES (?, ?, ?, ?, ?)").run(node.id, "[]", "[]", "[]", "codex");
-    const snap = snapshotCapture.captureSnapshot(rig.id, "test");
-    sessionRegistry.updateStatus(session.id, "exited");
-    db.prepare("DELETE FROM bindings WHERE node_id = ?").run(node.id);
-
-    const mockAdapter = {
-      runtime: "codex",
-      listInstalled: vi.fn(async () => []),
-      project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
-      deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({
-        ready: false,
-        code: "update_gate",
-        reason: "Codex reached an update flow, so process-alive alone is not proof of a restored conversation.",
-      })),
-      launchHarness: vi.fn(async () => ({ ok: true as const })),
-    };
-
-    const orch = createOrchestrator();
-    const result = await orch.restore(snap.id, { adapters: { codex: mockAdapter } });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      const nodeResult = result.result.nodes.find((n) => n.nodeId === node.id);
-      expect(nodeResult!.status).toBe("attention_required");
-      expect(nodeResult!.error).toContain("Restore startup requires attention");
-      expect(nodeResult!.error).toContain("Codex reached an update flow");
-      // Single attention_required node → partially_restored (NOT failed)
-      // per restore-orchestrator.ts:65-67 mixed-status aggregation.
-      expect(result.result.rigResult).toBe("partially_restored");
-      expect(mockAdapter.launchHarness).toHaveBeenCalledTimes(1);
-    }
-    const nodeSessions = sessionRegistry.getSessionsForRig(rig.id).filter((s) => s.nodeId === node.id);
-    const restoredSession = nodeSessions.reduce((latest, s) => s.id > latest.id ? s : latest);
-    expect(restoredSession?.startupStatus).toBe("attention_required");
   });
 
   it("fallback fresh launch during restore replays fresh_start startup actions", async () => {
@@ -1565,8 +1504,7 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
-      launchHarness: vi.fn(async () => ({ ok: true as const })),
+      launchHarness: vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "builtin:terminal" }); return { ok: true as const }; }),
     };
 
     const orch = createOrchestrator({ tmux });
@@ -2026,7 +1964,6 @@ describe("RestoreOrchestrator", () => {
       listInstalled: vi.fn(async () => []),
       project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
       deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-      checkReady: vi.fn(async () => ({ ready: true })),
       launchHarness: vi.fn(async () => ({ ok: true as const })),
     };
     const result = await createOrchestrator().restore(snapshot.id, {
@@ -2719,13 +2656,12 @@ describe("RestoreOrchestrator", () => {
       sessionRegistry.updateStatus(session.id, "exited");
       db.prepare("DELETE FROM bindings WHERE node_id = ?").run(node.id);
 
-      const launchHarness = vi.fn(async () => ({ ok: true as const, resumeToken: "resume-token-guard03", resumeType: "claude_id" }));
+      const launchHarness = vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" }); return { ok: true as const, resumeToken: "resume-token-guard03", resumeType: "claude_id" }; });
       const mockAdapter = {
         runtime: "claude-code",
         listInstalled: vi.fn(async () => []),
         project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
         deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-        checkReady: vi.fn(async () => ({ ready: true })),
         launchHarness,
       };
       const tmux = mockTmux();

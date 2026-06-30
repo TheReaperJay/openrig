@@ -12,10 +12,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { NodeLauncher } from "../src/domain/node-launcher.js";
 import { StartupOrchestrator } from "../src/domain/startup-orchestrator.js";
 import { PodRigInstantiator } from "../src/domain/rigspec-instantiator.js";
@@ -98,6 +100,7 @@ describe("Agent Starter v1 vertical — real Claude adapter delivery (M2 R2)", (
       const podRepo = new PodRepository(db);
       const sessionRegistry = new SessionRegistry(db);
       const eventBus = new EventBus(db);
+      const agentActivityStore = new AgentActivityStore({ db, eventBus });
       const tmux = mockTmux();
       const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
       const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
@@ -108,6 +111,14 @@ describe("Agent Starter v1 vertical — real Claude adapter delivery (M2 R2)", (
       // the merge_guidance branch can run.
       const claudeFs = mockClaudeFs({ [registryEntryPath]: CLAUDE_STARTER });
       const claudeAdapter = new ClaudeCodeAdapter({ tmux, fsOps: claudeFs });
+      // Simulate the relay firing its SessionStart after the real harness boots
+      // so the event-driven readiness wait resolves.
+      const realClaudeLaunch = claudeAdapter.launchHarness.bind(claudeAdapter);
+      (claudeAdapter as { launchHarness: typeof claudeAdapter.launchHarness }).launchHarness = async (binding, opts) => {
+        const r = await realClaudeLaunch(binding, opts);
+        simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" });
+        return r;
+      };
 
       // Pass-through Codex/terminal adapters keep the instantiator's
       // adapter map type-complete; this test only exercises Claude.
@@ -116,7 +127,6 @@ describe("Agent Starter v1 vertical — real Claude adapter delivery (M2 R2)", (
         listInstalled: async () => [],
         project: async () => ({ projected: [], skipped: [], failed: [] }),
         deliverStartup: async () => ({ delivered: 0, failed: [] }),
-        checkReady: async () => ({ ready: true }),
         launchHarness: async () => ({ ok: true }),
       };
 

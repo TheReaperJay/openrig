@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { StartupOrchestrator } from "../src/domain/startup-orchestrator.js";
 import { resolveAgentRef, type AgentResolverFsOps } from "../src/domain/agent-resolver.js";
 import { resolveNodeConfig } from "../src/domain/profile-resolver.js";
@@ -26,7 +28,7 @@ function mockTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function mockAdapter(fsCheck?: AgentResolverFsOps): RuntimeAdapter {
+function mockAdapter(agentActivityStore: AgentActivityStore, fsCheck?: AgentResolverFsOps): RuntimeAdapter {
   return {
     runtime: "claude-code",
     listInstalled: vi.fn(async () => []),
@@ -43,8 +45,7 @@ function mockAdapter(fsCheck?: AgentResolverFsOps): RuntimeAdapter {
       }
       return { delivered: files.length - failed.length, failed };
     }),
-    checkReady: vi.fn(async () => ({ ready: true })),
-    launchHarness: vi.fn(async () => ({ ok: true })),
+    launchHarness: vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime: "claude-code" }); return { ok: true }; }),
   };
 }
 
@@ -62,6 +63,7 @@ describe("AgentSpec startup integration", () => {
     const rigRepo = new RigRepository(db);
     const sessionRegistry = new SessionRegistry(db);
     const eventBus = new EventBus(db);
+    const agentActivityStore = new AgentActivityStore({ db, eventBus });
     const tmux = mockTmux();
     // 1. Set up rig spec + agent spec on mock filesystem
     const rigRoot = "/project/rigs/my-rig";
@@ -89,7 +91,7 @@ describe("AgentSpec startup integration", () => {
       [`${rigRoot}/pods/dev/overlays/impl.md`]: "# Impl overlay",
       [`${rigRoot}/agents/impl/startup/base.md`]: "# Base startup",
     });
-    const adapter = mockAdapter(fs);
+    const adapter = mockAdapter(agentActivityStore, fs);
 
     // 2. Parse rig spec
     const rawRig = RigSpecCodec.parse(rigSpecYaml);

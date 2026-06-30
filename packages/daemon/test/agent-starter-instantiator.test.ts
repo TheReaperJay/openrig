@@ -20,6 +20,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createFullTestDb } from "./helpers/test-app.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { PodRepository } from "../src/domain/pod-repository.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
@@ -46,14 +48,13 @@ function mockTmux(): TmuxAdapter {
   } as unknown as TmuxAdapter;
 }
 
-function mockAdapter(runtime = "claude-code"): RuntimeAdapter {
+function mockAdapter(agentActivityStore: AgentActivityStore, runtime = "claude-code"): RuntimeAdapter {
   return {
     runtime,
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
-    launchHarness: vi.fn(async () => ({ ok: true })),
+    launchHarness: vi.fn(async (binding) => { simulateSessionStart(agentActivityStore, { nodeId: binding.nodeId, runtime }); return { ok: true }; }),
   };
 }
 
@@ -148,18 +149,19 @@ function setupWithStarter(opts: {
   const podRepo = new PodRepository(db);
   const sessionRegistry = new SessionRegistry(db);
   const eventBus = new EventBus(db);
+  const agentActivityStore = new AgentActivityStore({ db, eventBus });
   const tmux = mockTmux();
   const nodeLauncher = new NodeLauncher({ db, rigRepo, sessionRegistry, eventBus, tmuxAdapter: tmux });
   const startupOrch = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter: tmux });
-  const adapter = mockAdapter("claude-code");
-  const codexAdapter = mockAdapter("codex");
+  const adapter = mockAdapter(agentActivityStore, "claude-code");
+  const codexAdapter = mockAdapter(agentActivityStore, "codex");
   const fsOps = mockFs({ [`${RIG_ROOT}/agents/impl/agent.yaml`]: agentYaml("impl") });
 
   const inst = new PodRigInstantiator({
     db, rigRepo, podRepo, sessionRegistry, eventBus, nodeLauncher,
     startupOrchestrator: startupOrch,
     fsOps,
-    adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter("terminal") },
+    adapters: { "claude-code": adapter, "codex": codexAdapter, "terminal": mockAdapter(agentActivityStore, "terminal") },
     tmuxAdapter: tmux,
   });
 

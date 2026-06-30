@@ -47,8 +47,12 @@ function emit(hookEvent: string, subtype?: string) {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Session boot / reload / resume / fork → the seat is alive
-  pi.on("session_start", () => emit("SessionStart"));
+  // Session boot / reload / resume / fork → the seat is alive.
+  // Forward the NATIVE reason (startup|reload|new|resume|fork) so the daemon
+  // records WHY the session started. Claude/codex already forward `source`
+  // via the relay's subtype; this makes pi symmetric. The reason flows to the
+  // daemon as the SessionStart hook's subtype.
+  pi.on("session_start", (e) => emit("SessionStart", e?.reason));
 
   // User prompt submitted, agent loop about to begin → busy
   pi.on("before_agent_start", () => emit("UserPromptSubmit"));

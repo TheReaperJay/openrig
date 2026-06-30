@@ -197,6 +197,7 @@ interface DaemonResult {
   db: Database.Database;
   deps: AppDeps;
   contextMonitor: import("./domain/context-monitor.js").ContextMonitor;
+  startupStatusSelfHealer: import("./domain/startup-status-self-healer.js").StartupStatusSelfHealer;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   injectWebSocket: (server: any) => void;
 }
@@ -448,8 +449,9 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const { StartupOrchestrator } = await import("./domain/startup-orchestrator.js");
   const { ClaudeCodeAdapter } = await import("./adapters/claude-code-adapter.js");
   const { CodexRuntimeAdapter } = await import("./adapters/codex-runtime-adapter.js");
-
-  const startupOrchestrator = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter, readFile: (p: string) => fs.readFileSync(p, "utf-8") });
+  const { SeatStatusStateMachine } = await import("./domain/seat-status-state-machine.js");
+  const seatStatusStateMachine = new SeatStatusStateMachine({ db, sessionRegistry, eventBus });
+  const startupOrchestrator = new StartupOrchestrator({ db, sessionRegistry, eventBus, tmuxAdapter, readFile: (p: string) => fs.readFileSync(p, "utf-8"), stateMachine: seatStatusStateMachine });
   const runtimeSettings = new ContextPackSettingsStore().resolveConfig();
   const claudeAdapter = new ClaudeCodeAdapter({ tmux: tmuxAdapter, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), copyFile: (src: string, dest: string) => fs.copyFileSync(src, dest), listFiles: (dir: string) => { const r: string[] = []; function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, readdir: (dir: string) => fs.readdirSync(dir), homedir: os.homedir() }, stateDir: OPENRIG_HOME, collectorAssetPath: nodePath.resolve(import.meta.dirname, "../assets/claude-statusline-context.cjs"), autoDriveProviderPrompts: runtimeSettings.recoveryAutoDriveProviderPrompts });
   const codexAdapter = new CodexRuntimeAdapter({ tmux: tmuxAdapter, fsOps: { readFile: (p: string) => fs.readFileSync(p, "utf-8"), writeFile: (p: string, c: string) => fs.writeFileSync(p, c, "utf-8"), exists: (p: string) => fs.existsSync(p), mkdirp: (p: string) => fs.mkdirSync(p, { recursive: true }), listFiles: (dir: string) => { const r: string[] = []; function w(d: string, pre: string) { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) w(nodePath.join(d, e.name), nodePath.join(pre, e.name)); else r.push(pre ? nodePath.join(pre, e.name) : e.name); } } w(dir, ""); return r; }, homedir: os.homedir() } });
@@ -725,6 +727,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const { SeatAttentionReconciler } = await import("./domain/seat-attention-reconciler.js");
   const seatAttentionReconciler = new SeatAttentionReconciler({
     sessionRegistry, eventBus, agentActivityStore, db,
+    stateMachine: seatStatusStateMachine,
     sendVerify: async (session, text, opts) => {
       const transport = deps.sessionTransport;
       if (!transport) return { ok: false, outcome: "failed" };
@@ -1341,10 +1344,9 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
         deps.sessionTransport,
       )
     : undefined;
-  const contextMonitor = new ContextMonitor(db, contextUsageStore, claudeAdapter, compactionEnforcer, {
-    "claude-code": claudeAdapter,
-    codex: codexAdapter,
-  });
+  const contextMonitor = new ContextMonitor(db, contextUsageStore, claudeAdapter, compactionEnforcer);
+  const { StartupStatusSelfHealer } = await import("./domain/startup-status-self-healer.js");
+  const startupStatusSelfHealer = new StartupStatusSelfHealer(db, eventBus, seatStatusStateMachine);
   deps.contextMonitor = contextMonitor;
 
   // OPR.0.3.4.9 — periodic snapshot scheduler (crash-insurance floor).
@@ -1354,5 +1356,5 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
 
   const { app, injectWebSocket } = createAppWithWebSocket(deps);
 
-  return { app, db, deps, contextMonitor, injectWebSocket };
+  return { app, db, deps, contextMonitor, startupStatusSelfHealer, injectWebSocket };
 }

@@ -153,6 +153,7 @@ export type RigEvent =
   | { type: "node.startup_pending"; rigId: string; nodeId: string }
   | { type: "node.startup_ready"; rigId: string; nodeId: string }
   | { type: "node.startup_failed"; rigId: string; nodeId: string; error: string }
+  | { type: "node.startup_attention_required"; rigId: string; nodeId: string; error: string }
   | { type: "continuity.sync"; rigId: string; podId: string; nodeId: string }
   | { type: "continuity.degraded"; rigId: string; podId: string; nodeId: string; reason: string }
   // V0.3.1 slice 05 kernel-rig-as-default — forward-fix #3 architectural.

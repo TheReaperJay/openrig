@@ -81,7 +81,7 @@ export async function startServer(port?: number) {
   const activityHookUrl =
     readOpenRigEnv("OPENRIG_URL", "RIGGED_URL") ?? deriveActivityHookUrl(bindHosts, p) ?? undefined;
 
-  const { app, contextMonitor, deps, injectWebSocket } = await createDaemon({
+  const { app, contextMonitor, startupStatusSelfHealer, deps, injectWebSocket } = await createDaemon({
     dbPath,
     bearerToken,
     terminalBearerToken,
@@ -101,6 +101,10 @@ export async function startServer(port?: number) {
       if (!monitorsStarted) {
         monitorsStarted = true;
         contextMonitor.start();
+        // Event-driven readiness self-heal: promote failed/attention seats to
+        // ready the instant they emit a lifecycle hook (covers pi, which the
+        // old runtime-keyed readiness-checker map never registered).
+        startupStatusSelfHealer.start();
         // PL-004 Phase C: start watchdog scheduler. Joins the supervision
         // tree post-bind so the HTTP surface is ready before the first
         // tick (matches contextMonitor pattern).

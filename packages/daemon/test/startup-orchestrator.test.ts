@@ -3,9 +3,11 @@ import type Database from "better-sqlite3";
 import { createFullTestDb } from "./helpers/test-app.js";
 import { SessionRegistry } from "../src/domain/session-registry.js";
 import { EventBus } from "../src/domain/event-bus.js";
+import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
+import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { StartupOrchestrator, type StartupInput } from "../src/domain/startup-orchestrator.js";
-import type { RuntimeAdapter, NodeBinding, ResolvedStartupFile, ProjectionResult, StartupDeliveryResult, ReadinessResult } from "../src/domain/runtime-adapter.js";
+import type { RuntimeAdapter, NodeBinding, ResolvedStartupFile, ProjectionResult, StartupDeliveryResult } from "../src/domain/runtime-adapter.js";
 import { resolveConcreteHint } from "../src/domain/runtime-adapter.js";
 import type { ProjectionPlan } from "../src/domain/projection-planner.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
@@ -33,7 +35,6 @@ function mockAdapter(overrides?: Partial<RuntimeAdapter>): RuntimeAdapter {
     listInstalled: vi.fn(async () => []),
     project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
     deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-    checkReady: vi.fn(async () => ({ ready: true })),
     launchHarness: vi.fn(async () => ({ ok: true })),
     ...overrides,
   };
@@ -43,8 +44,8 @@ function emptyPlan(): ProjectionPlan {
   return { runtime: "claude-code", cwd: ".", entries: [], startup: { files: [], actions: [] }, conflicts: [], noOps: [], diagnostics: [] };
 }
 
-function makeBinding(): NodeBinding {
-  return { id: "b1", nodeId: "n1", tmuxSession: "r01-impl", tmuxWindow: null, tmuxPane: null, cmuxWorkspace: null, cmuxSurface: null, updatedAt: "", cwd: "." };
+function makeBinding(nodeId: string): NodeBinding {
+  return { id: "b1", nodeId, tmuxSession: "r01-impl", tmuxWindow: null, tmuxPane: null, cmuxWorkspace: null, cmuxSurface: null, updatedAt: "", cwd: "." };
 }
 
 function makeAction(overrides?: Partial<StartupAction>): StartupAction {
@@ -75,6 +76,7 @@ describe("StartupOrchestrator", () => {
   let db: Database.Database;
   let sessionRegistry: SessionRegistry;
   let eventBus: EventBus;
+  let agentActivityStore: AgentActivityStore;
   let rigRepo: RigRepository;
   let tmux: TmuxAdapter;
 
@@ -82,6 +84,7 @@ describe("StartupOrchestrator", () => {
     db = createFullTestDb();
     sessionRegistry = new SessionRegistry(db);
     eventBus = new EventBus(db);
+    agentActivityStore = new AgentActivityStore({ db, eventBus });
     rigRepo = new RigRepository(db);
     tmux = mockTmux();
   });
@@ -104,6 +107,22 @@ describe("StartupOrchestrator", () => {
     });
   }
 
+  // Readiness is now event-driven: startNode subscribes to the EventBus and
+  // resolves on the first `agent.activity` for the node. This helper drives the
+  // REAL pipeline (AgentActivityStore.recordHookEvent -> eventBus.emit) on the
+  // next macrotask via simulateSessionStart — after startNode has drained its
+  // pre-readiness microtasks and registered the awaitFirstActivity subscriber
+  // — so success-path tests resolve instead of hanging. No parallel emit; the
+  // single source of truth for "harness booted" is recordHookEvent.
+  async function runNode(
+    orch: StartupOrchestrator,
+    input: StartupInput,
+  ): Promise<{ ok: true; startupStatus: "ready"; continuityOutcome: "resumed" | "fresh" | "forked" | "rebuilt" } | { ok: false; startupStatus: "attention_required" | "failed"; errors: string[]; evidence?: string }> {
+    const p = orch.startNode(input);
+    simulateSessionStart(agentActivityStore, { nodeId: input.binding.nodeId, runtime: input.adapter.runtime });
+    return p;
+  }
+
   function seedSession(): { rigId: string; nodeId: string; sessionId: string } {
     const rig = rigRepo.createRig("test-rig");
     const node = rigRepo.addNode(rig.id, "impl", { runtime: "claude-code" });
@@ -117,7 +136,7 @@ describe("StartupOrchestrator", () => {
       rigId: seed.rigId,
       nodeId: seed.nodeId,
       sessionId: seed.sessionId,
-      binding: makeBinding(),
+      binding: makeBinding(seed.nodeId),
       adapter: mockAdapter(),
       plan: emptyPlan(),
       resolvedStartupFiles: [],
@@ -139,7 +158,7 @@ describe("StartupOrchestrator", () => {
     });
 
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed, { adapter }));
+    await runNode(orch, makeInput(seed, { adapter }));
     expect(statusDuringProject).toBe("pending");
   });
 
@@ -147,7 +166,7 @@ describe("StartupOrchestrator", () => {
   it("successful startup transitions to ready", async () => {
     const seed = seedSession();
     const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed));
+    const result = await runNode(orch, makeInput(seed));
     expect(result.ok).toBe(true);
     expect(result.startupStatus).toBe("ready");
 
@@ -180,12 +199,12 @@ describe("StartupOrchestrator", () => {
     const failTmux = mockTmux({ sendText: vi.fn(async () => ({ ok: false as const, message: "session gone" })) });
     const orch = createOrchestrator({ tmux: failTmux });
     const actions: StartupAction[] = [makeAction({ phase: "after_ready" })];
-    const result = await orch.startNode(makeInput(seed, { startupActions: actions }));
+    const result = await runNode(orch, makeInput(seed, { startupActions: actions }));
     expect(result.ok).toBe(false);
     expect(result.startupStatus).toBe("failed");
   });
 
-  // T5: new startup sequence: project → pre-launch deliver → launchHarness → checkReady → post-launch deliver → after_files → after_ready
+  // T5: new startup sequence: project → pre-launch deliver → launchHarness → readiness(event) → post-launch deliver → after_files → after_ready
   it("startup sequence: pre-launch deliver before launchHarness; after_files after post-launch; after_ready last", async () => {
     const seed = seedSession();
     const callOrder: string[] = [];
@@ -194,7 +213,6 @@ describe("StartupOrchestrator", () => {
       project: vi.fn(async () => { callOrder.push("project"); return { projected: [], skipped: [], failed: [] }; }),
       deliverStartup: vi.fn(async () => { callOrder.push("deliver"); return { delivered: 1, failed: [] }; }),
       launchHarness: vi.fn(async () => { callOrder.push("launchHarness"); return { ok: true }; }),
-      checkReady: vi.fn(async () => { callOrder.push("checkReady"); return { ready: true }; }),
     });
 
     const t = mockTmux({
@@ -213,18 +231,16 @@ describe("StartupOrchestrator", () => {
       { path: "culture.md", absolutePath: "/tmp/culture.md", ownerRoot: "/tmp", deliveryHint: "guidance_merge" as const, required: true, appliesOn: ["fresh_start" as const, "restore" as const] },
       { path: "priming.txt", absolutePath: "/tmp/priming.txt", ownerRoot: "/tmp", deliveryHint: "send_text" as const, required: false, appliesOn: ["fresh_start" as const] },
     ];
-    await orch.startNode(makeInput(seed, { adapter, startupActions: actions, resolvedStartupFiles: files }));
+    await runNode(orch, makeInput(seed, { adapter, startupActions: actions, resolvedStartupFiles: files }));
 
     const projectIdx = callOrder.indexOf("project");
     const launchIdx = callOrder.indexOf("launchHarness");
-    const checkReadyIdx = callOrder.indexOf("checkReady");
     const afterFilesIdx = callOrder.indexOf("action:/after-files-cmd");
     const afterReadyIdx = callOrder.indexOf("action:/after-ready-cmd");
 
     // deliver is called twice (pre-launch + post-launch), but we verify order via launchHarness position
     expect(launchIdx).toBeGreaterThan(projectIdx);
-    expect(checkReadyIdx).toBeGreaterThan(launchIdx);
-    expect(afterFilesIdx).toBeGreaterThan(checkReadyIdx);
+    expect(afterFilesIdx).toBeGreaterThan(launchIdx);
     expect(afterReadyIdx).toBeGreaterThan(afterFilesIdx);
   });
 
@@ -235,7 +251,7 @@ describe("StartupOrchestrator", () => {
     const actions: StartupAction[] = [
       makeAction({ value: "/setup-once", idempotent: false, appliesOn: ["fresh_start"] }),
     ];
-    const result = await orch.startNode(makeInput(seed, { startupActions: actions, isRestore: true }));
+    const result = await runNode(orch, makeInput(seed, { startupActions: actions, isRestore: true }));
     expect(result.ok).toBe(true);
     expect(tmux.sendText).not.toHaveBeenCalled();
   });
@@ -247,7 +263,7 @@ describe("StartupOrchestrator", () => {
     const actions: StartupAction[] = [
       makeAction({ value: "/rename impl", idempotent: true, appliesOn: ["fresh_start", "restore"] }),
     ];
-    const result = await orch.startNode(makeInput(seed, { startupActions: actions, isRestore: true }));
+    const result = await runNode(orch, makeInput(seed, { startupActions: actions, isRestore: true }));
     expect(result.ok).toBe(true);
     expect(tmux.sendText).toHaveBeenCalledWith("r01-impl", "/rename impl");
   });
@@ -257,7 +273,7 @@ describe("StartupOrchestrator", () => {
     const orch = createOrchestrator();
     const actions: StartupAction[] = [makeAction({ value: "/rename impl" })];
 
-    const result = await orch.startNode(makeInput(seed, { startupActions: actions }));
+    const result = await runNode(orch, makeInput(seed, { startupActions: actions }));
 
     expect(result.ok).toBe(true);
     expect(tmux.sendText).toHaveBeenCalledWith("r01-impl", "/rename impl");
@@ -272,63 +288,23 @@ describe("StartupOrchestrator", () => {
     const actions: StartupAction[] = [
       makeAction({ value: "/debug-overlay", phase: "after_ready" }),
     ];
-    const result = await orch.startNode(makeInput(seed, { startupActions: actions }));
+    const result = await runNode(orch, makeInput(seed, { startupActions: actions }));
     expect(result.ok).toBe(true);
     expect(tmux.sendText).toHaveBeenCalledWith("r01-impl", "/debug-overlay");
   });
 
-  // T9: reconciler reports failed startup state
+  // T9: reconciler reports failed startup state. Readiness is event-driven now;
+  // with no agent.activity emitted, awaitFirstActivity times out at
+  // readinessTimeoutMs -> startup_status 'failed'.
   it("failed startup visible in session query", async () => {
     const seed = seedSession();
-    const adapter = mockAdapter({
-      checkReady: vi.fn(async () => ({ ready: false, reason: "not responding" })),
-    });
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed, { adapter, readinessTimeoutMs: 100 }));
+    await orch.startNode(makeInput(seed, { readinessTimeoutMs: 100 }));
 
-    // Session should show failed startup
     const sessions = sessionRegistry.getSessionsForRig(seed.rigId);
     const session = sessions.find((s) => s.id === seed.sessionId);
     expect(session).toBeDefined();
     expect(session!.startupStatus).toBe("failed");
-  });
-
-  it("recoverable interactive startup blockers become attention_required", async () => {
-    const seed = seedSession();
-    const adapter = mockAdapter({
-      checkReady: vi.fn(async () => ({
-        ready: false,
-        code: "trust_gate",
-        reason: "Claude is waiting for workspace trust approval before the session can become interactive.",
-      })),
-    });
-    const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed, { adapter }));
-
-    expect(result.ok).toBe(false);
-    expect(result.startupStatus).toBe("attention_required");
-
-    const row = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(seed.sessionId) as { startup_status: string };
-    expect(row.startup_status).toBe("attention_required");
-  });
-
-  it("Claude MCP approval blockers become attention_required", async () => {
-    const seed = seedSession();
-    const adapter = mockAdapter({
-      checkReady: vi.fn(async () => ({
-        ready: false,
-        code: "mcp_gate",
-        reason: "Claude is waiting for project MCP server approval before the session can become interactive.",
-      })),
-    });
-    const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed, { adapter }));
-
-    expect(result.ok).toBe(false);
-    expect(result.startupStatus).toBe("attention_required");
-
-    const row = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(seed.sessionId) as { startup_status: string };
-    expect(row.startup_status).toBe("attention_required");
   });
 
   it("injects the session identity into the first fresh send_text prompt", async () => {
@@ -344,7 +320,7 @@ describe("StartupOrchestrator", () => {
       readFile: (path) => path === "/tmp/role.md" ? "Role instructions go here." : "",
     });
 
-    const result = await orch.startNode(makeInput(seed, {
+    const result = await runNode(orch, makeInput(seed, {
       adapter,
       resolvedStartupFiles: [{
         path: "guidance/role.md",
@@ -380,7 +356,7 @@ describe("StartupOrchestrator", () => {
     const tmuxOverride = mockTmux({ sendText });
     const orch = createOrchestrator({ tmux: tmuxOverride });
 
-    const result = await orch.startNode(makeInput(seed, {
+    const result = await runNode(orch, makeInput(seed, {
       startupActions: [
         makeIdentityAction(),
         makeAction({ value: "/rename impl" }),
@@ -410,7 +386,7 @@ describe("StartupOrchestrator", () => {
     });
     const orch = createOrchestrator({ tmux: tmuxOverride });
 
-    const result = await orch.startNode(makeInput(seed, {
+    const result = await runNode(orch, makeInput(seed, {
       adapter,
       isRestore: true,
       resumeToken: "stale-token",
@@ -442,7 +418,7 @@ describe("StartupOrchestrator", () => {
 
     // Only after orchestrator.startNode completes does it become ready
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed));
+    await runNode(orch, makeInput(seed));
     const afterRow = db.prepare("SELECT startup_status FROM sessions WHERE id = ?").get(seed.sessionId) as { startup_status: string };
     expect(afterRow.startup_status).toBe("ready");
   });
@@ -452,11 +428,7 @@ describe("StartupOrchestrator", () => {
     const seed = seedSession();
 
     // First attempt: fails during action (non-idempotent action executes then something else fails)
-    const failAdapter = mockAdapter({
-      checkReady: vi.fn()
-        .mockResolvedValueOnce({ ready: true }) // first attempt: ready
-        .mockResolvedValueOnce({ ready: true }), // retry: ready
-    });
+    const failAdapter = mockAdapter();
     const failTmux = mockTmux({
       sendText: vi.fn()
         .mockResolvedValueOnce({ ok: true }) // first attempt: action succeeds
@@ -471,11 +443,11 @@ describe("StartupOrchestrator", () => {
     ];
 
     // First attempt fails on second action
-    const r1 = await orch.startNode(makeInput(seed, { adapter: failAdapter, startupActions: actions, isRestore: false }));
+    const r1 = await runNode(orch, makeInput(seed, { adapter: failAdapter, startupActions: actions, isRestore: false }));
     expect(r1.ok).toBe(false);
 
     // Retry as restore — non-idempotent /setup-once should be skipped
-    const r2 = await orch.startNode(makeInput(seed, { adapter: failAdapter, startupActions: actions, isRestore: true }));
+    const r2 = await runNode(orch, makeInput(seed, { adapter: failAdapter, startupActions: actions, isRestore: true }));
     expect(r2.ok).toBe(true);
 
     // /setup-once was called once (first attempt only), /configure called in retry
@@ -492,7 +464,7 @@ describe("StartupOrchestrator", () => {
       { path: "always.md", absolutePath: "/rig/always.md", ownerRoot: "/rig", deliveryHint: "auto", required: true, appliesOn: ["fresh_start", "restore"] },
     ];
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed, { adapter, resolvedStartupFiles: files, isRestore: true }));
+    await runNode(orch, makeInput(seed, { adapter, resolvedStartupFiles: files, isRestore: true }));
 
     // Only "always.md" should be delivered, not "fresh.md"
     const deliverCalls = (adapter.deliverStartup as ReturnType<typeof vi.fn>).mock.calls;
@@ -509,7 +481,7 @@ describe("StartupOrchestrator", () => {
     eventBus.subscribe((e) => events.push(e.type));
 
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed));
+    await runNode(orch, makeInput(seed));
 
     expect(events).toContain("node.startup_pending");
     expect(events).toContain("node.startup_ready");
@@ -565,7 +537,7 @@ describe("StartupOrchestrator", () => {
       launchHarness: vi.fn(async () => ({ ok: true as const, resumeToken: "sess-xyz", resumeType: "claude_id" })),
     });
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed, { adapter }));
+    await runNode(orch, makeInput(seed, { adapter }));
 
     const sessions = sessionRegistry.getSessionsForRig(seed.rigId);
     const session = sessions.find((s) => s.id === seed.sessionId);
@@ -579,7 +551,7 @@ describe("StartupOrchestrator", () => {
       launchHarness: vi.fn(async () => ({ ok: true as const, resumeToken: "", resumeType: "claude_id" })),
     });
     const orch = createOrchestrator();
-    await orch.startNode(makeInput(seed, { adapter }));
+    await runNode(orch, makeInput(seed, { adapter }));
 
     const sessions = sessionRegistry.getSessionsForRig(seed.rigId);
     const session = sessions.find((s) => s.id === seed.sessionId);
@@ -598,7 +570,7 @@ describe("StartupOrchestrator", () => {
     });
     const orch = createOrchestrator();
 
-    const result = await orch.startNode(makeInput(seed, {
+    const result = await runNode(orch, makeInput(seed, {
       adapter,
       isRestore: true,
       resumeToken: "stale-token",
@@ -670,52 +642,16 @@ describe("StartupOrchestrator", () => {
     expect(session!.startupStatus).toBe("attention_required");
   });
 
-  // NS-T05: readiness retry loop
-  it("readiness retries until ready", async () => {
-    const seed = seedSession();
-    let callCount = 0;
-    const adapter = mockAdapter({
-      checkReady: vi.fn(async () => {
-        callCount++;
-        // Ready on 3rd attempt
-        return callCount >= 3 ? { ready: true } : { ready: false, reason: "not yet" };
-      }),
-    });
-    const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed, { adapter, readinessTimeoutMs: 10_000 }));
-    expect(result.ok).toBe(true);
-    expect(callCount).toBeGreaterThanOrEqual(3);
-  });
-
+  // NS-T05: readiness timeout. Readiness is event-driven now; with no
+  // agent.activity emitted, awaitFirstActivity times out at readinessTimeoutMs
+  // and startup fails with the timeout message.
   it("readiness timeout → startup_failed with timeout message", async () => {
     const seed = seedSession();
-    const adapter = mockAdapter({
-      checkReady: vi.fn(async () => ({ ready: false, reason: "harness not interactive" })),
-    });
     const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed, { adapter, readinessTimeoutMs: 100 }));
+    const result = await orch.startNode(makeInput(seed, { readinessTimeoutMs: 100 }));
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.errors.some((e) => e.includes("timeout") || e.includes("Readiness timeout"))).toBe(true);
-    }
-  });
-
-  it("readiness blocker fails immediately with the blocker reason instead of a timeout", async () => {
-    const seed = seedSession();
-    const adapter = mockAdapter({
-      checkReady: vi.fn(async () => ({
-        ready: false,
-        reason: "Codex is waiting for workspace trust approval before the session can become interactive.",
-        code: "trust_gate",
-      })),
-    });
-    const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed, { adapter, readinessTimeoutMs: 10_000 }));
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.startupStatus).toBe("attention_required");
-      expect(result.errors.some((e) => e.includes("Startup requires attention"))).toBe(true);
-      expect(result.errors.some((e) => e.includes("timeout"))).toBe(false);
+      expect(result.errors.some((e) => e.includes("timeout") || e.includes("Readiness timeout") || e.includes("activity hook"))).toBe(true);
     }
   });
 
@@ -746,7 +682,7 @@ describe("StartupOrchestrator", () => {
     };
 
     const orch = createOrchestrator();
-    const result = await orch.startNode(makeInput(seed, {
+    const result = await runNode(orch, makeInput(seed, {
       adapter,
       resolvedStartupFiles: [roleFile, onboardingFile],
     }));

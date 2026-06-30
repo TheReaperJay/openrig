@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { TmuxAdapter } from "./tmux.js";
 import type {
   RuntimeAdapter, NodeBinding, ResolvedStartupFile,
-  InstalledResource, ProjectionResult, StartupDeliveryResult, ReadinessResult,
+  InstalledResource, ProjectionResult, StartupDeliveryResult,
   HarnessLaunchResult,
 } from "../domain/runtime-adapter.js";
 import { resolveConcreteHint } from "../domain/runtime-adapter.js";
@@ -261,27 +261,6 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     // but fall back to the UUID we assigned explicitly at launch time.
     const token = this.captureResumeToken(opts.name);
     return { ok: true, resumeToken: token ?? generatedSessionId ?? undefined, resumeType: "claude_id" };
-  }
-
-  async checkReady(binding: NodeBinding): Promise<ReadinessResult> {
-    if (!binding.tmuxSession) {
-      return { ready: false, reason: "No tmux session bound" };
-    }
-    const alive = await this.tmux.hasSession(binding.tmuxSession);
-    if (!alive) {
-      return { ready: false, reason: "tmux session not responsive" };
-    }
-
-    const paneCommand = await this.tmux.getPaneCommand(binding.tmuxSession);
-    const paneContent = (await this.tmux.capturePaneContent(binding.tmuxSession, 40)) ?? "";
-    const probe = assessNativeResumeProbe({
-      runtime: "claude-code",
-      paneCommand,
-      paneContent,
-    });
-
-    if (probe.status === "resumed") return { ready: true };
-    return { ready: false, reason: probe.detail, code: probe.code };
   }
 
   /** Best-effort public seam for tmux-bound Claude sessions adopted outside the launch path. */

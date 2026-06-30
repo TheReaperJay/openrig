@@ -1,0 +1,89 @@
+version: "0.2"
+name: product-team-pi
+summary: >
+  Pi-only variant of product-team for dogfooding the pi-coding-agent runtime.
+  Same topology (two orchestrators, implementation, QA, design, two reviewers)
+  but every seat runs pi-coding-agent.
+
+pods:
+  - id: orch1
+    label: Orchestration
+    members:
+      - id: lead
+        agent_ref: "local:../../../agents/orchestration/orchestrator"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+      - id: peer
+        agent_ref: "local:../../../agents/orchestration/orchestrator"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+    edges: []
+
+  - id: dev1
+    label: Development
+    members:
+      - id: impl
+        agent_ref: "local:../../../agents/development/implementer"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+      - id: qa
+        agent_ref: "local:../../../agents/development/qa"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+      - id: design
+        agent_ref: "local:../../../agents/design/product-designer"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+    edges:
+      - kind: delegates_to
+        from: impl
+        to: qa
+
+  - id: rev1
+    label: Review
+    members:
+      - id: r1
+        agent_ref: "local:../../../agents/review/independent-reviewer"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+      - id: r2
+        agent_ref: "local:../../../agents/review/independent-reviewer"
+        runtime: pi-coding-agent
+        profile: default
+        cwd: "."
+    edges: []
+
+edges:
+  - kind: delegates_to
+    from: orch1.lead
+    to: dev1.impl
+  - kind: delegates_to
+    from: orch1.lead
+    to: dev1.design
+  - kind: delegates_to
+    from: orch1.lead
+    to: rev1.r1
+  - kind: delegates_to
+    from: orch1.peer
+    to: dev1.qa
+  - kind: delegates_to
+    from: orch1.peer
+    to: rev1.r2
+  - kind: can_observe
+    from: rev1.r1
+    to: dev1.impl
+  - kind: can_observe
+    from: rev1.r1
+    to: dev1.design
+  - kind: can_observe
+    from: rev1.r2
+    to: dev1.impl
+  - kind: can_observe
+    from: rev1.r2
+    to: dev1.qa

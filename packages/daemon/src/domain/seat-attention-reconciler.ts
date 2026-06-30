@@ -6,6 +6,7 @@ import type { SessionRegistry } from "./session-registry.js";
 import type { EventBus } from "./event-bus.js";
 import type { AgentActivityStore } from "./agent-activity-store.js";
 import type { AgentActivity } from "./types.js";
+import { SeatStatusStateMachine } from "./seat-status-state-machine.js";
 
 export interface ClearAttentionResult {
   ok: boolean;
@@ -36,22 +37,33 @@ interface ClearAttentionDeps {
   sendVerify?: SendVerifyFn;
   capture?: CaptureFn;
   db?: Database.Database;
+  /** Single owner of `startup_status` transitions. Optional — defaults to a
+   *  machine built from sessionRegistry/eventBus (+ db) so existing tests that
+   *  don't inject one keep working. */
+  stateMachine?: SeatStatusStateMachine;
 }
 
 const POSITIVE_STATES = new Set(["running", "idle"]);
 
 export class SeatAttentionReconciler {
   private deps: ClearAttentionDeps;
+  private readonly stateMachine: SeatStatusStateMachine;
 
   constructor(deps: ClearAttentionDeps) {
-    this.deps = deps;
+    const stateMachine = deps.stateMachine ?? new SeatStatusStateMachine({
+      db: deps.db ?? deps.sessionRegistry.db,
+      sessionRegistry: deps.sessionRegistry,
+      eventBus: deps.eventBus,
+    });
+    this.deps = { ...deps, stateMachine };
+    this.stateMachine = stateMachine;
   }
 
   async clearAttention(
     sessionName: string,
     opts?: { reason?: string },
   ): Promise<ClearAttentionResult> {
-    const { sessionRegistry, eventBus, agentActivityStore } = this.deps;
+    const { eventBus, agentActivityStore } = this.deps;
 
     // Resolve session -> node + current startup_status.
     const session = this.findLatestSessionByName(sessionName);
@@ -72,15 +84,8 @@ export class SeatAttentionReconciler {
     if (opts?.reason) {
       const clearedClasses: ("startup_status" | "restore_outcome")[] = [];
       if (startupClassActive) {
-        sessionRegistry.updateStartupStatus(session.id, "ready", new Date().toISOString());
-        eventBus.emit({
-          type: "seat.attention_cleared",
-          rigId: session.rigId,
-          nodeId: session.nodeId,
-          sessionName,
-          from: session.startupStatus,
-          to: "ready",
-          clearedBy: "operator_attestation",
+        this.stateMachine.transition(session.id, {
+          kind: "operator_attestation",
           reason: opts.reason,
           previousError,
         });
@@ -161,19 +166,12 @@ export class SeatAttentionReconciler {
     evidence: { kind: string; state?: string; reason?: string },
     previousError: string | null,
   ): ClearAttentionResult {
-    const { sessionRegistry, eventBus } = this.deps;
+    const { eventBus } = this.deps;
     const clearedClasses: ("startup_status" | "restore_outcome")[] = [];
 
     if (startupClassActive) {
-      sessionRegistry.updateStartupStatus(session.id, "ready", new Date().toISOString());
-      eventBus.emit({
-        type: "seat.attention_cleared",
-        rigId: session.rigId,
-        nodeId: session.nodeId,
-        sessionName,
-        from: session.startupStatus,
-        to: "ready",
-        clearedBy: "evidence",
+      this.stateMachine.transition(session.id, {
+        kind: "evidence_clear",
         evidence,
         previousError,
       });

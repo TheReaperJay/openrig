@@ -32,12 +32,6 @@ describe("TerminalAdapter", () => {
     expect(result).toEqual({ delivered: 0, failed: [] });
   });
 
-  // Test 3
-  it("checkReady returns { ready: true } immediately", async () => {
-    const result = await adapter.checkReady(MOCK_BINDING);
-    expect(result).toEqual({ ready: true });
-  });
-
   it("runtime is 'terminal'", () => {
     expect(adapter.runtime).toBe("terminal");
   });

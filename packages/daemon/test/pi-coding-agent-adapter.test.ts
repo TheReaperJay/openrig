@@ -210,25 +210,4 @@ describe("Pi Coding Agent adapter — launch + readiness", () => {
     expect(tmux.sendText).toHaveBeenCalledWith("test", expect.stringContaining("pi --session 'sess-123'"));
     expect(tmux.sendKeys).toHaveBeenCalledWith("test", ["Enter"]);
   });
-
-  it("reports ready when pane command is node/pi", async () => {
-    const tmux = mockTmux();
-    tmux.getPaneCommand = vi.fn().mockResolvedValue("node");
-    tmux.capturePaneContent = vi.fn().mockResolvedValue("some pi tui text");
-    const adapter = new PiCodingAgentAdapter({ tmux, fsOps: mockPiFs() });
-
-    const result = await adapter.checkReady(makeBinding("/cwd"));
-    expect(result.ready).toBe(true);
-  });
-
-  it("reports shell-returned failure when pane is a shell", async () => {
-    const tmux = mockTmux();
-    tmux.getPaneCommand = vi.fn().mockResolvedValue("bash");
-    tmux.capturePaneContent = vi.fn().mockResolvedValue("$ ");
-    const adapter = new PiCodingAgentAdapter({ tmux, fsOps: mockPiFs() });
-
-    const result = await adapter.checkReady(makeBinding("/cwd"));
-    expect(result.ready).toBe(false);
-    expect(result.code).toBe("returned_to_shell");
-  });
 });

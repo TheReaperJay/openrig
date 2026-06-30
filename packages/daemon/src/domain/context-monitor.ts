@@ -1,11 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ClaudeCompactionEnforcer } from "./claude-compaction-enforcer.js";
 import type { ContextUsageStore } from "./context-usage-store.js";
-import {
-  isAttentionRequiredReadinessCode,
-  type NodeBinding,
-  type ReadinessResult,
-} from "./runtime-adapter.js";
 import type { ContextUsage } from "./types.js";
 
 /** Default polling interval: 30 seconds. */
@@ -23,11 +18,6 @@ interface EligibleSession {
 
 interface ClaudeContextProvisioner {
   ensureContextCollector(binding: { cwd?: string | null; tmuxSession?: string | null }): void;
-  checkReady?(binding: NodeBinding): Promise<ReadinessResult>;
-}
-
-interface RuntimeReadinessChecker {
-  checkReady?(binding: NodeBinding): Promise<ReadinessResult>;
 }
 
 /**
@@ -39,13 +29,18 @@ interface RuntimeReadinessChecker {
  * tick after persistence so policy-driven /compact triggers fire on the
  * same observation the operator sees in the UI. Without an enforcer
  * provided, polling behavior is unchanged.
+ *
+ * NOTE: readiness self-heal used to live here as `normalizeStartupStatus`,
+ * a 30s poll that re-ran the pane-scanner on failed seats. It is now
+ * event-driven and lives in `StartupStatusSelfHealer` (subscribes to the
+ * native lifecycle hook). This class now owns ONLY context-window
+ * telemetry acquisition.
  */
 export class ContextMonitor {
   private db: Database.Database;
   private store: ContextUsageStore;
   private claudeContextProvisioner: ClaudeContextProvisioner | null;
   private compactionEnforcer: ClaudeCompactionEnforcer | null;
-  private readinessCheckers: Record<string, RuntimeReadinessChecker | undefined>;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -53,16 +48,11 @@ export class ContextMonitor {
     store: ContextUsageStore,
     claudeContextProvisioner?: ClaudeContextProvisioner,
     compactionEnforcer?: ClaudeCompactionEnforcer,
-    readinessCheckers?: Record<string, RuntimeReadinessChecker | undefined>,
   ) {
     this.db = db;
     this.store = store;
     this.claudeContextProvisioner = claudeContextProvisioner ?? null;
     this.compactionEnforcer = compactionEnforcer ?? null;
-    this.readinessCheckers = readinessCheckers ?? {};
-    if (claudeContextProvisioner && !this.readinessCheckers["claude-code"]) {
-      this.readinessCheckers["claude-code"] = claudeContextProvisioner;
-    }
   }
 
   /** Discover active managed Claude sessions and poll their sidecar files. */
@@ -84,7 +74,6 @@ export class ContextMonitor {
         }
       }
 
-      await this.normalizeStartupStatus(session);
       await this.maybeAutoCompact(session, observed);
     }
   }
@@ -178,45 +167,5 @@ export class ContextMonitor {
       tmuxSession: session.session_name,
     });
     return this.store.readAndNormalize(session.session_name);
-  }
-
-  private async normalizeStartupStatus(session: EligibleSession): Promise<void> {
-    const checker = session.runtime ? this.readinessCheckers[session.runtime] : undefined;
-    if (!checker?.checkReady) return;
-    if (session.startup_status !== "failed" && session.startup_status !== "attention_required") return;
-
-    try {
-      const readiness = await checker.checkReady({
-        id: `context-monitor:${session.session_id}`,
-        nodeId: session.node_id,
-        attachmentType: "tmux",
-        tmuxSession: session.session_name,
-        tmuxWindow: null,
-        tmuxPane: null,
-        cmuxWorkspace: null,
-        cmuxSurface: null,
-        updatedAt: "",
-        cwd: session.cwd ?? "",
-      });
-      if (readiness.ready) {
-        this.db.prepare(`
-          UPDATE sessions
-          SET startup_status = 'ready',
-              startup_completed_at = ?
-          WHERE id = ?
-        `).run(new Date().toISOString(), session.session_id);
-        return;
-      }
-
-      if (isAttentionRequiredReadinessCode(readiness.code)) {
-        this.db.prepare(`
-          UPDATE sessions
-          SET startup_status = 'attention_required'
-          WHERE id = ?
-        `).run(session.session_id);
-      }
-    } catch {
-      // Best-effort normalization only; telemetry polling still succeeds.
-    }
   }
 }

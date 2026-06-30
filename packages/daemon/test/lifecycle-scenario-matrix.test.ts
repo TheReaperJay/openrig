@@ -541,7 +541,6 @@ describe("Lifecycle reboot/recovery scenario matrix (Tier 1)", () => {
           listInstalled: vi.fn(async () => []),
           project: vi.fn(async () => ({ projected: [], skipped: [], failed: [] })),
           deliverStartup: vi.fn(async () => ({ delivered: 0, failed: [] })),
-          checkReady: vi.fn(async () => ({ ready: true })),
           launchHarness,
         };
 
