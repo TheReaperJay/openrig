@@ -284,7 +284,7 @@ function looksLikeCodexTui(paneContent: string): boolean {
 //    logged out or signed in to another account. Please sign in again."
 //   "Your access token could not be refreshed. Please log out and sign
 //    in again."
-function looksLikeCodexAuthRefusal(paneContent: string): boolean {
+export function looksLikeCodexAuthRefusal(paneContent: string): boolean {
   if (!paneContent.includes("access token could not be refreshed")) return false;
   return (
     paneContent.includes("Please sign in again")

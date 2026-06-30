@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import type { EventBus } from "./event-bus.js";
-import type { AgentActivity, PersistedEvent, ReplyFailureSignal } from "./types.js";
+import type { AgentActivity, PersistedEvent } from "./types.js";
+import type { ReplyFailureSignal } from "./reply-failure/types.js";
 
 export interface HookActivityInput {
   runtime: string | null;

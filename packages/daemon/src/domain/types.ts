@@ -371,25 +371,11 @@ export type RestoreOutcome =
 export type NodeRestoreOutcome = "resumed" | "rebuilt" | "fresh" | "fresh-primed" | "awaiting-decision" | "failed" | "attention_required" | "operator_recovered" | "n-a";
 export type OccupantLifecycle = "active" | "retiring" | "retired" | "context_walled" | "compacted" | "crashed" | "unknown";
 export type ContinuityOutcome = "resumed" | "rebuilt" | "forked" | "fresh" | "failed";
+import type { ReplyFailureSignal } from "./reply-failure/types.js";
+
 export type HandoverResult = "complete" | "unchanged" | "partial" | "failed" | null;
 export type AgentActivityState = "running" | "needs_input" | "idle" | "unknown";
 export type AgentActivityEvidenceSource = "runtime_hook";
-
-/** Structured failure signal carried on an agent.activity event when a harness's
- *  turn-end hook reports a provider/model error. Each field maps to a native
- *  hook payload field from exactly one runtime family; detectors read the field
- *  that their harness populates and ignore the rest. A signal is only present
- *  when an actual failure was reported (plain successful turns leave this unset). */
-export interface ReplyFailureSignal {
-  /** Claude StopFailure `error` (discrete type, e.g. "authentication_failed"). */
-  errorType?: string;
-  /** Claude StopFailure `error_details` (free text). */
-  errorDetails?: string;
-  /** Pi `after_provider_response.status` (raw HTTP int, e.g. 401). */
-  httpStatus?: number;
-  /** Codex Stop / Claude StopFailure `last_assistant_message` (rendered text). */
-  lastAssistantMessage?: string;
-}
 
 export interface AgentActivity {
   state: AgentActivityState;
