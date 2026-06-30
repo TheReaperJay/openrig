@@ -12,6 +12,7 @@ import { resolveConcreteHint } from "../domain/runtime-adapter.js";
 import type { ProjectionPlan, ProjectionEntry } from "../domain/projection-planner.js";
 import { assessNativeResumeProbe } from "../domain/native-resume-probe.js";
 import { mergeManagedBlock } from "../domain/managed-blocks.js";
+import type { AuthProbeResult } from "../domain/auth-probe.js";
 import {
   TELEMETRY_PLUGIN_ID,
   vendoredTelemetryPluginPath,
@@ -54,6 +55,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   private stateDir: string | null;
   private collectorAssetPath: string | null;
   private autoDriveProviderPrompts: boolean;
+  private authProbe?: () => Promise<AuthProbeResult>;
 
   constructor(deps: {
     tmux: TmuxAdapter;
@@ -63,6 +65,11 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     stateDir?: string;
     collectorAssetPath?: string;
     autoDriveProviderPrompts?: boolean;
+    /** #1 auth status probe, run on the fresh launch path only. Optional —
+     *     when omitted the probe is SKIPPED (existing tests stay deterministic;
+     *     production wires the real `claude auth status --json` probe). Tests
+     *     inject a stub to assert fail-fast behavior without the binary. */
+    authProbe?: () => Promise<AuthProbeResult>;
   }) {
     this.tmux = deps.tmux;
     this.fs = deps.fsOps;
@@ -71,6 +78,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     this.stateDir = deps.stateDir ?? null;
     this.collectorAssetPath = deps.collectorAssetPath ?? null;
     this.autoDriveProviderPrompts = deps.autoDriveProviderPrompts ?? false;
+    this.authProbe = deps.authProbe;
   }
 
   async listInstalled(binding: NodeBinding): Promise<InstalledResource[]> {
@@ -192,6 +200,18 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
 
     if (opts.resumeToken && opts.forkSource) {
       return { ok: false, error: "resumeToken and forkSource are mutually exclusive — pick one" };
+    }
+
+    // #1 — headless auth status probe, fresh path only. Fail fast as
+    // attention_required BEFORE sending the harness command, so a
+    // logged-out runtime never wastes a tmux pane + 30s readiness timeout.
+    // Resume/fork reuse an existing session and skip this (their auth state
+    // is whatever the seat already had).
+    if (!opts.resumeToken && !opts.forkSource && this.authProbe) {
+      const auth = await this.authProbe();
+      if (!auth.ok) {
+        return { ok: false, error: auth.detail, recovery: "attention_required", evidence: auth.evidence };
+      }
     }
 
     const permissionMode = "--permission-mode acceptEdits";

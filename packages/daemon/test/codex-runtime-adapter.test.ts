@@ -7,6 +7,7 @@ import { CodexRuntimeAdapter, type CodexAdapterFsOps } from "../src/adapters/cod
 import type { NodeBinding, ResolvedStartupFile } from "../src/domain/runtime-adapter.js";
 import type { ProjectionPlan, ProjectionEntry } from "../src/domain/projection-planner.js";
 import type { TmuxAdapter } from "../src/adapters/tmux.js";
+import type { AuthProbeResult } from "../src/domain/auth-probe.js";
 
 function mockTmux(overrides?: Partial<TmuxAdapter>): TmuxAdapter {
   return {
@@ -1084,5 +1085,42 @@ describe("Codex runtime adapter", () => {
       expect.stringContaining("skip: effectiveId is rig-role")
     );
     logSpy.mockRestore();
+  });
+});
+
+describe("CodexRuntimeAdapter.launchHarness — #1 auth probe (fresh path)", () => {
+  const okProbe: () => Promise<AuthProbeResult> = async () => ({ ok: true, code: "codex_auth_refusal", detail: "authenticated", evidence: "" });
+
+  it("returns recovery:attention_required and does NOT sendText when the probe says not logged in", async () => {
+    const tmux = mockTmux();
+    const adapter = new CodexRuntimeAdapter({
+      tmux,
+      fsOps: mockFs(),
+      sleep: async () => {},
+      authProbe: async () => ({ ok: false, code: "codex_auth_refusal", detail: "Codex is not logged in", evidence: "Not logged in" }),
+    });
+    const result = await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.recovery).toBe("attention_required");
+      expect(result.evidence).toBe("Not logged in");
+    }
+    expect(tmux.sendText).not.toHaveBeenCalled();
+  });
+
+  it("proceeds to sendText when the probe says authenticated", async () => {
+    const tmux = mockTmux();
+    const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), sleep: async () => {}, authProbe: okProbe });
+    const result = await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig" });
+    expect(result.ok).toBe(true);
+    expect(tmux.sendText).toHaveBeenCalled();
+  });
+
+  it("skips the probe on resume (resumeToken set)", async () => {
+    const tmux = mockTmux();
+    const probe = vi.fn(okProbe);
+    const adapter = new CodexRuntimeAdapter({ tmux, fsOps: mockFs(), sleep: async () => {}, authProbe: probe });
+    await adapter.launchHarness(makeBinding(), { name: "dev-qa@test-rig", resumeToken: "sess-456" });
+    expect(probe).not.toHaveBeenCalled();
   });
 });

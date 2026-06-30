@@ -10,6 +10,7 @@ import type {
   InstalledResource, ProjectionResult, StartupDeliveryResult,
   HarnessLaunchResult,
 } from "../domain/runtime-adapter.js";
+import type { AuthProbeResult } from "../domain/auth-probe.js";
 import { resolveConcreteHint } from "../domain/runtime-adapter.js";
 import type { ProjectionPlan, ProjectionEntry } from "../domain/projection-planner.js";
 import {
@@ -49,6 +50,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
   private readThreadIdByPid: (pid: number) => string | undefined;
   private sleep: (ms: number) => Promise<void>;
   private resolveHomeDirByPid: ResolveHomeDirByPid;
+  private authProbe?: () => Promise<AuthProbeResult>;
 
   constructor(deps: {
     tmux: TmuxAdapter;
@@ -57,6 +59,11 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     readThreadIdByPid?: (pid: number) => string | undefined;
     resolveHomeDirByPid?: ResolveHomeDirByPid;
     sleep?: (ms: number) => Promise<void>;
+    /** #1 auth status probe, run on the fresh launch path only (after the
+     *     profile preflight). Optional — when omitted the probe is SKIPPED
+     *     (existing tests stay deterministic; production wires the real
+     *     `codex login status` probe). Tests inject a stub. */
+    authProbe?: () => Promise<AuthProbeResult>;
   }) {
     this.tmux = deps.tmux;
     this.fs = deps.fsOps;
@@ -64,6 +71,7 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
     this.readThreadIdByPid = deps.readThreadIdByPid ?? ((pid) => this.readThreadIdFromLogs(pid));
     this.resolveHomeDirByPid = deps.resolveHomeDirByPid ?? defaultResolveHomeDirByPid;
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.authProbe = deps.authProbe;
   }
 
   /**
@@ -229,6 +237,18 @@ export class CodexRuntimeAdapter implements RuntimeAdapter {
         };
       }
     }
+
+    // #1 — headless auth status probe, fresh path only, AFTER the profile
+    // preflight (profile errors fail first) and BEFORE the harness command.
+    // Fail fast as attention_required so a logged-out codex never wastes a
+    // tmux pane + 30s readiness timeout. Resume/fork reuse an existing session.
+    if (!opts.resumeToken && !opts.forkSource && this.authProbe) {
+      const auth = await this.authProbe();
+      if (!auth.ok) {
+        return { ok: false, error: auth.detail, recovery: "attention_required", evidence: auth.evidence };
+      }
+    }
+
     const gitDirArg = ` --add-dir ${shellQuote(nodePath.join(binding.cwd, ".git"))}`;
     const queueStateDirArg = this.buildQueueStateAddDirArg(opts.name);
 
