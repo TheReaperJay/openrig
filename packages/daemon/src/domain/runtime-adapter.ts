@@ -64,6 +64,13 @@ export const ATTENTION_REQUIRED_READINESS_CODES = new Set([
   "update_gate",
   "login_required",
   "mcp_gate",
+  // A readiness timeout: the harness never emitted a lifecycle hook within the
+  // window, so it never became interactive. This is recoverable (a slow boot,
+  // a transient stall) rather than a hard death — the seat stays alive and
+  // the self-healer promotes it to ready the instant a hook eventually lands.
+  // Routing it to attention_required (not failed) keeps the rig intact and
+  // recoverable instead of tearing it down for a slow-boot false negative.
+  "awaiting_runtime",
   // Codex auth refusal (stored OAuth token can no longer be refreshed).
   // Defensive: row 6's verifyResumeLaunch patch propagates attention_required
   // through the launch path so the readiness fallback shouldn't see this code,

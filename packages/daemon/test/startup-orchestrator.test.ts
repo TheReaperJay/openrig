@@ -7,6 +7,7 @@ import { AgentActivityStore } from "../src/domain/agent-activity-store.js";
 import { simulateSessionStart } from "./helpers/simulate-hook.js";
 import { RigRepository } from "../src/domain/rig-repository.js";
 import { StartupOrchestrator, type StartupInput } from "../src/domain/startup-orchestrator.js";
+import { StartupStatusSelfHealer } from "../src/domain/startup-status-self-healer.js";
 import type { RuntimeAdapter, NodeBinding, ResolvedStartupFile, ProjectionResult, StartupDeliveryResult } from "../src/domain/runtime-adapter.js";
 import { resolveConcreteHint } from "../src/domain/runtime-adapter.js";
 import type { ProjectionPlan } from "../src/domain/projection-planner.js";
@@ -295,8 +296,11 @@ describe("StartupOrchestrator", () => {
 
   // T9: reconciler reports failed startup state. Readiness is event-driven now;
   // with no agent.activity emitted, awaitFirstActivity times out at
-  // readinessTimeoutMs -> startup_status 'failed'.
-  it("failed startup visible in session query", async () => {
+  // readinessTimeoutMs -> startup_status 'attention_required' (recoverable,
+  // not a hard death). A later lifecycle hook lets the self-healer promote it
+  // back to ready — proving the seat survives a slow boot instead of being
+  // torn down for a timeout false negative.
+  it("attention_required startup visible in session query, then recovers on a late hook", async () => {
     const seed = seedSession();
     const orch = createOrchestrator();
     await orch.startNode(makeInput(seed, { readinessTimeoutMs: 100 }));
@@ -304,7 +308,17 @@ describe("StartupOrchestrator", () => {
     const sessions = sessionRegistry.getSessionsForRig(seed.rigId);
     const session = sessions.find((s) => s.id === seed.sessionId);
     expect(session).toBeDefined();
-    expect(session!.startupStatus).toBe("failed");
+    expect(session!.startupStatus).toBe("attention_required");
+
+    // Slow-boot recovery: a lifecycle hook arriving after the timeout lets the
+    // self-healer promote the attention seat back to ready.
+    const healer = new StartupStatusSelfHealer(db, eventBus);
+    healer.start();
+    simulateSessionStart(agentActivityStore, { nodeId: seed.nodeId, runtime: "claude-code" });
+    await new Promise((r) => setTimeout(r, 0));
+    const recovered = sessionRegistry.getSessionsForRig(seed.rigId).find((s) => s.id === seed.sessionId);
+    expect(recovered!.startupStatus).toBe("ready");
+    healer.stop();
   });
 
   it("injects the session identity into the first fresh send_text prompt", async () => {
@@ -643,14 +657,16 @@ describe("StartupOrchestrator", () => {
   });
 
   // NS-T05: readiness timeout. Readiness is event-driven now; with no
-  // agent.activity emitted, awaitFirstActivity times out at readinessTimeoutMs
-  // and startup fails with the timeout message.
-  it("readiness timeout → startup_failed with timeout message", async () => {
+  // agent.activity emitted, awaitFirstActivity times out at readinessTimeoutMs.
+  // A timeout is attention_required (recoverable), not failed: the seat stays
+  // alive and can self-heal on a late hook.
+  it("readiness timeout → startup_attention_required with timeout message", async () => {
     const seed = seedSession();
     const orch = createOrchestrator();
     const result = await orch.startNode(makeInput(seed, { readinessTimeoutMs: 100 }));
     expect(result.ok).toBe(false);
     if (!result.ok) {
+      expect(result.startupStatus).toBe("attention_required");
       expect(result.errors.some((e) => e.includes("timeout") || e.includes("Readiness timeout") || e.includes("activity hook"))).toBe(true);
     }
   });
