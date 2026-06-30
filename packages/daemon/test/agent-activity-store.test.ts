@@ -198,4 +198,85 @@ describe("AgentActivityStore", () => {
       code: "missing_session_identity",
     });
   });
+
+  describe("reply failure signal forwarding", () => {
+    it("forwards Claude StopFailure error fields onto replyFailureSignal (and marks idle)", () => {
+      const { node, sessionName } = seedSession("claude-code");
+      const store = new AgentActivityStore({ db, eventBus, now: () => NOW });
+
+      store.recordHookEvent({
+        runtime: "claude-code",
+        sessionName,
+        hookEvent: "StopFailure",
+        errorType: "authentication_failed",
+        errorDetails: "Invalid API key",
+        lastAssistantMessage: "API Error: 401 Unauthorized",
+        occurredAt: "2026-04-24T11:59:00.000Z",
+      });
+
+      const latest = store.getLatestForNode({ nodeId: node.id, sessionName, now: NOW });
+      // The turn still ended → idle from a liveness standpoint.
+      expect(latest).toMatchObject({
+        state: "idle",
+        rawEvent: "StopFailure",
+        replyFailureSignal: {
+          errorType: "authentication_failed",
+          errorDetails: "Invalid API key",
+          lastAssistantMessage: "API Error: 401 Unauthorized",
+        },
+      });
+    });
+
+    it("leaves replyFailureSignal unset on a plain successful Stop", () => {
+      const { node, sessionName } = seedSession("claude-code");
+      const store = new AgentActivityStore({ db, eventBus, now: () => NOW });
+
+      store.recordHookEvent({
+        runtime: "claude-code",
+        sessionName,
+        hookEvent: "Stop",
+        occurredAt: "2026-04-24T11:59:00.000Z",
+      });
+
+      const latest = store.getLatestForNode({ nodeId: node.id, sessionName, now: NOW });
+      expect(latest?.state).toBe("idle");
+      expect(latest?.replyFailureSignal).toBeUndefined();
+    });
+
+    it("forwards Pi provider status onto replyFailureSignal.httpStatus", () => {
+      const { node, sessionName } = seedSession("claude-code");
+      const store = new AgentActivityStore({ db, eventBus, now: () => NOW });
+
+      store.recordHookEvent({
+        runtime: "claude-code",
+        sessionName,
+        hookEvent: "StopFailure",
+        httpStatus: 401,
+        occurredAt: "2026-04-24T11:59:00.000Z",
+      });
+
+      const latest = store.getLatestForNode({ nodeId: node.id, sessionName, now: NOW });
+      expect(latest).toMatchObject({
+        state: "idle",
+        replyFailureSignal: { httpStatus: 401 },
+      });
+    });
+
+    it("does not attach a signal when all failure fields are empty/blank", () => {
+      const { node, sessionName } = seedSession("claude-code");
+      const store = new AgentActivityStore({ db, eventBus, now: () => NOW });
+
+      store.recordHookEvent({
+        runtime: "claude-code",
+        sessionName,
+        hookEvent: "StopFailure",
+        errorType: "   ",
+        errorDetails: "",
+        occurredAt: "2026-04-24T11:59:00.000Z",
+      });
+
+      const latest = store.getLatestForNode({ nodeId: node.id, sessionName, now: NOW });
+      expect(latest?.replyFailureSignal).toBeUndefined();
+    });
+  });
 });

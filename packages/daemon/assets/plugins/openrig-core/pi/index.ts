@@ -30,10 +30,10 @@ function isManagedByOpenRig(): boolean {
   );
 }
 
-function emit(hookEvent: string, subtype?: string) {
+function emit(hookEvent: string, subtype?: string, extra?: Record<string, unknown>) {
   if (!isManagedByOpenRig()) return;
 
-  const payload = JSON.stringify({ hookEvent, subtype });
+  const payload = JSON.stringify({ hookEvent, subtype, ...extra });
   const child = spawn(process.execPath, [RELAY], {
     stdio: ["pipe", "ignore", "ignore"],
     env: process.env,
@@ -62,6 +62,17 @@ export default function (pi: ExtensionAPI) {
 
   // Agent turn finished → idle (until next prompt)
   pi.on("agent_end", () => emit("Stop"));
+
+  // Provider response with an error status → the turn is ending on an API
+  // failure. Forward as StopFailure carrying the raw HTTP status so the daemon
+  // can flag access/entitlement failures (401/403). Only forwarded on error
+  // (status >= 400) — successful responses let agent_end's Stop above mark idle.
+  pi.on("after_provider_response", (e) => {
+    const status = e?.status;
+    if (typeof status === "number" && status >= 400) {
+      emit("StopFailure", undefined, { httpStatus: status });
+    }
+  });
 
   // Session replacement / quit → seat going away
   pi.on("session_shutdown", () => emit("SessionEnd"));

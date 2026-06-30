@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { EventBus } from "./event-bus.js";
-import type { AgentActivity, PersistedEvent } from "./types.js";
+import type { AgentActivity, PersistedEvent, ReplyFailureSignal } from "./types.js";
 
 export interface HookActivityInput {
   runtime: string | null;
@@ -9,6 +9,14 @@ export interface HookActivityInput {
   hookEvent: string;
   subtype?: string | null;
   occurredAt?: string | null;
+  /** Claude StopFailure `error`. */
+  errorType?: string | null;
+  /** Claude StopFailure `error_details`. */
+  errorDetails?: string | null;
+  /** Pi `after_provider_response.status`. */
+  httpStatus?: number | null;
+  /** Codex Stop / Claude StopFailure `last_assistant_message`. */
+  lastAssistantMessage?: string | null;
 }
 
 export type RecordHookActivityResult =
@@ -69,6 +77,10 @@ export class AgentActivityStore {
       subtype: input.subtype ?? null,
       sampledAt,
       eventAt,
+      errorType: input.errorType ?? null,
+      errorDetails: input.errorDetails ?? null,
+      httpStatus: input.httpStatus ?? null,
+      lastAssistantMessage: input.lastAssistantMessage ?? null,
     });
 
     const event = this.eventBus.emit({
@@ -156,6 +168,10 @@ function normalizeHookActivity(input: {
   subtype: string | null;
   sampledAt: string;
   eventAt: string;
+  errorType: string | null;
+  errorDetails: string | null;
+  httpStatus: number | null;
+  lastAssistantMessage: string | null;
 }): AgentActivity {
   const rawEvent = input.hookEvent;
   const rawSubtype = input.subtype;
@@ -175,7 +191,16 @@ function normalizeHookActivity(input: {
       state = "unknown";
       normalizedReason = rawSubtype ? reason : "notification";
     }
-  } else if (rawEvent === "Stop" || rawEvent === "SessionEnd" || rawEvent === "stop" || rawEvent === "idle") {
+  } else if (
+    rawEvent === "Stop" ||
+    rawEvent === "StopFailure" ||
+    rawEvent === "SessionEnd" ||
+    rawEvent === "stop" ||
+    rawEvent === "idle"
+  ) {
+    // StopFailure fires INSTEAD OF Stop when a turn ends on an API error — the
+    // turn still ended, so the seat is idle from a liveness standpoint. The
+    // structured failure (if any) rides on replyFailureSignal below.
     state = "idle";
   } else if (rawEvent === "SessionStart") {
     state = "unknown";
@@ -184,6 +209,13 @@ function normalizeHookActivity(input: {
     state = "unknown";
     normalizedReason = "unmapped_runtime_hook";
   }
+
+  const replyFailureSignal = buildReplyFailureSignal({
+    errorType: input.errorType,
+    errorDetails: input.errorDetails,
+    httpStatus: input.httpStatus,
+    lastAssistantMessage: input.lastAssistantMessage,
+  });
 
   return {
     state,
@@ -195,7 +227,33 @@ function normalizeHookActivity(input: {
     rawEvent,
     rawSubtype,
     runtime,
+    ...(replyFailureSignal ? { replyFailureSignal } : {}),
   };
+}
+
+/** Builds the structured failure signal from whichever native fields the
+ *  reporting harness forwarded. Returns undefined when no failure was reported
+ *  (a plain successful turn), so the activity carries no signal at all. */
+function buildReplyFailureSignal(input: {
+  errorType: string | null;
+  errorDetails: string | null;
+  httpStatus: number | null;
+  lastAssistantMessage: string | null;
+}): ReplyFailureSignal | undefined {
+  const errorType = input.errorType?.trim() || undefined;
+  const errorDetails = input.errorDetails?.trim() || undefined;
+  const lastAssistantMessage = input.lastAssistantMessage?.trim() || undefined;
+  const httpStatus =
+    typeof input.httpStatus === "number" && Number.isFinite(input.httpStatus)
+      ? input.httpStatus
+      : undefined;
+  if (!errorType && !errorDetails && !httpStatus && !lastAssistantMessage) return undefined;
+  const signal: ReplyFailureSignal = {};
+  if (errorType) signal.errorType = errorType;
+  if (errorDetails) signal.errorDetails = errorDetails;
+  if (httpStatus !== undefined) signal.httpStatus = httpStatus;
+  if (lastAssistantMessage) signal.lastAssistantMessage = lastAssistantMessage;
+  return signal;
 }
 
 function normalizeReason(value: string): string {

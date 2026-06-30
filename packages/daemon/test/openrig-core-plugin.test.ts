@@ -125,7 +125,7 @@ describe("openrig-core plugin — hooks (HG-2.6 + HG-2.7)", () => {
     const config = JSON.parse(content) as { hooks: Record<string, unknown> };
     expect(config.hooks).toBeDefined();
     expect(Object.keys(config.hooks).sort()).toEqual([
-      "Notification", "PostCompact", "SessionStart", "Stop", "UserPromptSubmit",
+      "Notification", "PostCompact", "SessionStart", "Stop", "StopFailure", "UserPromptSubmit",
     ]);
   });
 

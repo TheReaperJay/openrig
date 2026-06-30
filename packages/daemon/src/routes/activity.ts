@@ -76,6 +76,10 @@ activityRoutes.post("/hooks", async (c) => {
     hookEvent: typeof body.hookEvent === "string" ? body.hookEvent : "",
     subtype: stringOrNull(body.subtype),
     occurredAt: stringOrNull(body.occurredAt),
+    errorType: stringOrNull(body.errorType),
+    errorDetails: stringOrNull(body.errorDetails),
+    lastAssistantMessage: stringOrNull(body.lastAssistantMessage),
+    httpStatus: typeof body.httpStatus === "number" ? body.httpStatus : null,
   });
 
   if (!result.ok) {

@@ -65,7 +65,35 @@ function buildOpenRigPayload(providerPayload, env = process.env, now = () => new
     providerPayload.matcher
   );
 
-  return {
+  // Native failure fields forwarded from each harness's turn-end hook.
+  // Claude StopFailure carries `error` (discrete type) + `error_details` +
+  // `last_assistant_message` (the rendered API error text). Pi posts its own
+  // payload (see pi/index.ts) with `httpStatus`.
+  //
+  // NOTE: `last_assistant_message` also exists on a plain successful Claude
+  // `Stop`, where it holds the assistant's NORMAL reply text — that is NOT a
+  // failure signal. Only forward it when the hook is a failure hook, so a
+  // successful turn carries no failure object at all.
+  const isFailureHook = hookEvent === "StopFailure";
+  const errorType = firstString(providerPayload.error, providerPayload.errorType);
+  const errorDetails = firstString(providerPayload.error_details, providerPayload.errorDetails);
+  const lastAssistantMessage = isFailureHook
+    ? firstString(providerPayload.last_assistant_message, providerPayload.lastAssistantMessage)
+    : null;
+  // Codex has no StopFailure event; its `Stop` carries `last_assistant_message`
+  // which a downstream string-matching detector inspects. Forward it for codex
+  // `Stop` only (the codex matcher's two-anchor rule filters benign text).
+  const runtimeLower = (runtime || "").toLowerCase();
+  const codexStopMessage =
+    !isFailureHook && runtimeLower.includes("codex") && hookEvent === "Stop"
+      ? firstString(providerPayload.last_assistant_message, providerPayload.lastAssistantMessage)
+      : null;
+  const forwardedLastMessage = lastAssistantMessage || codexStopMessage || null;
+  const httpStatusRaw = providerPayload.httpStatus ?? providerPayload.status;
+  const httpStatus =
+    typeof httpStatusRaw === "number" && Number.isFinite(httpStatusRaw) ? httpStatusRaw : null;
+
+  const payload = {
     sessionName,
     nodeId,
     runtime,
@@ -73,6 +101,15 @@ function buildOpenRigPayload(providerPayload, env = process.env, now = () => new
     subtype,
     occurredAt: now().toISOString(),
   };
+  // Only attach failure fields when one is present, so plain successful turns
+  // don't carry an empty failure object.
+  if (errorType || errorDetails || forwardedLastMessage || httpStatus !== null) {
+    payload.errorType = errorType;
+    payload.errorDetails = errorDetails;
+    payload.lastAssistantMessage = forwardedLastMessage;
+    if (httpStatus !== null) payload.httpStatus = httpStatus;
+  }
+  return payload;
 }
 
 async function postHookPayload(payload, env = process.env) {
